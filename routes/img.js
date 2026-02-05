@@ -3,12 +3,11 @@ const router = express.Router();
 const http = require('http');
 const https = require('https');
 
-const MAX_BYTES = 6 * 1024 * 1024; // 6MB
+const MAX_BYTES = 6 * 1024 * 1024;
 const TIMEOUT_MS = 12_000;
 const MAX_REDIRECTS = 3;
 
 function isAllowedHost(hostname) {
-  // 仅允许网易云图片 CDN，避免 SSRF
   return /^p\d+\.music\.126\.net$/i.test(hostname);
 }
 
@@ -21,16 +20,14 @@ function proxyImage(url, res, redirectCount = 0) {
 
     const req = protocol.get(url, {
       headers: {
-        // 某些 CDN 对 UA/Referer/Accept 有要求
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://music.163.com/',
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
       },
       timeout: TIMEOUT_MS
     }, (r) => {
-      // 跟随重定向（限制次数 + host 校验）
       if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
-        r.resume(); // 丢弃数据，避免泄漏
+        r.resume();
         const loc = r.headers.location;
         if (!loc) return reject(new Error('Redirect without location'));
         const next = new URL(loc, url);
@@ -41,7 +38,6 @@ function proxyImage(url, res, redirectCount = 0) {
 
       if (r.statusCode !== 200) {
         r.resume();
-        // 这里返回 502（上游错误），并把状态码写进响应头方便排查
         if (!res.headersSent) res.setHeader('X-Upstream-Status', String(r.statusCode || ''));
         return reject(new Error(`Upstream HTTP ${r.statusCode}`));
       }
@@ -115,7 +111,6 @@ router.get('/', async (req, res) => {
     if (msg === 'Too large') {
       return res.status(413).send('Too large');
     }
-    // 上游非 200（常见 403/404/5xx）统一返回 502，方便前端识别为“上游图床失败”
     if (msg.startsWith('Upstream HTTP')) {
       return res.status(502).send('Upstream error');
     }
@@ -124,4 +119,3 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
-

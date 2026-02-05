@@ -5,42 +5,27 @@ const { decrypt } = require('../lib/crypto');
 const { playlistOps } = require('../lib/db');
 const { auth } = require('../lib/auth');
 
-// 参数校验：纯数字ID（防路径穿越）
 function isValidNumericId(id) {
   return typeof id === 'string' && /^\d+$/.test(id) && id.length <= 20;
 }
 
-/**
- * 获取正确的 baseUrl（支持反向代理环境）
- * 优先级：环境变量 BASE_URL > Express 默认处理（依赖 TRUST_PROXY）
- * 
- * 注意：不再直接信任 X-Forwarded-Host，避免客户端伪造导致 URL 注入。
- * 反向代理场景请正确配置 TRUST_PROXY（如 1/2/loopback）并设置 BASE_URL。
- */
 function getBaseUrl(req) {
-  // 1. 优先使用环境变量中配置的 BASE_URL（最可靠）
   if (process.env.BASE_URL) {
-    return process.env.BASE_URL.replace(/\/$/, ''); // 移除末尾斜杠
+    return process.env.BASE_URL.replace(/\/$/, '');
   }
   
-  // 2. 使用 Express 默认处理（需要正确配置 TRUST_PROXY 才能识别反代后的 protocol/host）
   return `${req.protocol}://${req.get('host')}`;
 }
 
-// 从输入中提取歌单ID（支持链接/纯数字）
 function parsePlaylistId(input) {
   if (!input) return null;
   const str = String(input).trim();
   if (!str) return null;
   if (/^\d+$/.test(str)) return str;
 
-  // 常见 URL: https://music.163.com/playlist?id=123
-  // https://music.163.com/#/playlist?id=123
-  // https://y.music.163.com/m/playlist?id=123
   const m1 = str.match(/(?:\?|&)id=(\d{1,20})/);
   if (m1) return m1[1];
 
-  // 兜底：/playlist/123
   const m2 = str.match(/\/playlist\/(\d{1,20})/);
   if (m2) return m2[1];
 
@@ -51,7 +36,6 @@ function toSqliteDatetime(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
-// 获取用户歌单列表
 router.get('/user', auth, async (req, res) => {
   const rawLimit = parseInt(req.query.limit, 10);
   const rawOffset = parseInt(req.query.offset, 10);
@@ -60,8 +44,6 @@ router.get('/user', auth, async (req, res) => {
   
   try {
     const cookie = decrypt(req.user.cookie);
-    // 兼容：部分情况下上游接口不严格遵守 limit/offset，这里统一由服务端做分页切片
-    // 一次性拉取较大数量（通常用户歌单远小于该值），再按 offset/limit 返回
     const result = await netease.getUserPlaylists(req.user.netease_id, cookie, 0, 1000);
     const all = Array.isArray(result.playlists) ? result.playlists : [];
     const total = Number.isFinite(result.count) ? result.count : all.length;
@@ -78,7 +60,6 @@ router.get('/user', auth, async (req, res) => {
   }
 });
 
-// 解析歌单链接/ID，缓存歌单详情
 router.get('/parse', auth, async (req, res) => {
   const input = req.query.url;
   const playlistId = parsePlaylistId(input);
@@ -88,7 +69,6 @@ router.get('/parse', auth, async (req, res) => {
   }
 
   try {
-    // 清理过期缓存（轻量）
     try {
       playlistOps.clearExpired.run();
     } catch (_) {}
@@ -136,7 +116,6 @@ router.get('/parse', auth, async (req, res) => {
   }
 });
 
-// 获取可播放的 m3u8 链接（返回给 VRChat 播放器）
 router.get('/url', auth, (req, res) => {
   const playlistId = String(req.query.id || '');
 
@@ -149,8 +128,6 @@ router.get('/url', auth, (req, res) => {
 
   res.json({ success: true, data: { url } });
 
-  // 在“生成链接”时就后台预加载第一首，提升首次播放起播速度
-  // 使用本机回环地址避免走外网/反代，且不阻塞当前响应
   try {
     const token = req.token;
     const port = process.env.PORT || 3000;

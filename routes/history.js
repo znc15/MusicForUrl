@@ -3,7 +3,6 @@ const router = express.Router();
 const { playLogOps } = require('../lib/db');
 const { auth } = require('../lib/auth');
 
-// 获取最近播放
 router.get('/recent', auth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
   const rawOffset = parseInt(req.query.offset, 10);
@@ -31,7 +30,6 @@ router.get('/recent', auth, (req, res) => {
   }
 });
 
-// 获取最常播放的歌曲
 router.get('/top', auth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
   

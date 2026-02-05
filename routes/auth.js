@@ -4,12 +4,10 @@ const netease = require('../lib/netease');
 const { encrypt, generateToken } = require('../lib/crypto');
 const { userOps } = require('../lib/db');
 
-// 存储待登录的二维码 key（带上限防止内存泄漏）
 const qrCodeSessions = new Map();
-const QR_SESSION_MAX = 500;  // 最大并发二维码数
-const QR_SESSION_TTL = 3 * 60 * 1000; // 3分钟过期
+const QR_SESSION_MAX = 500;
+const QR_SESSION_TTL = 3 * 60 * 1000;
 
-// 定期清理过期的二维码会话
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of qrCodeSessions.entries()) {
@@ -17,12 +15,10 @@ setInterval(() => {
       qrCodeSessions.delete(key);
     }
   }
-}, 60 * 1000); // 每分钟清理一次
+}, 60 * 1000);
 
-// 获取登录二维码
 router.get('/qrcode', async (req, res) => {
   try {
-    // 检查是否超过上限
     if (qrCodeSessions.size >= QR_SESSION_MAX) {
       return res.status(503).json({ success: false, message: '登录请求过多，请稍后重试' });
     }
@@ -30,7 +26,6 @@ router.get('/qrcode', async (req, res) => {
     const { key, qrimg } = await netease.createQRCode();
     qrCodeSessions.set(key, { created: Date.now() });
     
-    // 3分钟后自动清理
     setTimeout(() => qrCodeSessions.delete(key), QR_SESSION_TTL);
     
     res.json({ success: true, data: { key, qrimg } });
@@ -40,7 +35,6 @@ router.get('/qrcode', async (req, res) => {
   }
 });
 
-// 检查二维码状态
 router.get('/qrcode/check', async (req, res) => {
   const { key } = req.query;
   
@@ -51,21 +45,17 @@ router.get('/qrcode/check', async (req, res) => {
   try {
     const result = await netease.checkQRCode(key);
     
-    // 登录成功
     if (result.code === 803 && result.cookie) {
       qrCodeSessions.delete(key);
       
-      // 获取用户信息
       const status = await netease.checkLoginStatus(result.cookie);
       
       if (!status.logged) {
         return res.json({ success: false, message: '登录状态异常' });
       }
       
-      // 生成用户 token
       const token = generateToken();
       
-      // 保存用户信息
       userOps.upsert.run({
         netease_id: String(status.userId),
         nickname: status.nickname,
@@ -101,7 +91,6 @@ router.get('/qrcode/check', async (req, res) => {
   }
 });
 
-// 发送验证码
 router.post('/captcha/send', async (req, res) => {
   const { phone } = req.body;
   
@@ -118,7 +107,6 @@ router.post('/captcha/send', async (req, res) => {
   }
 });
 
-// 验证码登录
 router.post('/login/captcha', async (req, res) => {
   const { phone, captcha } = req.body;
   
@@ -158,7 +146,6 @@ router.post('/login/captcha', async (req, res) => {
   }
 });
 
-// 密码登录
 router.post('/login/password', async (req, res) => {
   const { phone, password } = req.body;
   
@@ -198,7 +185,6 @@ router.post('/login/password', async (req, res) => {
   }
 });
 
-// Cookie 登录
 router.post('/login/cookie', async (req, res) => {
   const { cookie } = req.body;
   
@@ -241,7 +227,6 @@ router.post('/login/cookie', async (req, res) => {
   }
 });
 
-// 检查登录状态
 router.get('/status', async (req, res) => {
   const token = req.headers['x-token'] || req.query.token;
   
@@ -268,15 +253,12 @@ router.get('/status', async (req, res) => {
   });
 });
 
-// 退出登录
-// 不删除用户记录，仅旋转 token 并清空 cookie，保留收藏/历史数据
 router.post('/logout', (req, res) => {
   const token = req.headers['x-token'] || req.body.token;
   
   if (token) {
     const user = userOps.getByToken.get(token);
     if (user) {
-      // 生成新 token 使旧 token 失效，同时清空加密的 cookie
       const newToken = generateToken();
       userOps.rotateToken.run(newToken, '', user.id);
     }

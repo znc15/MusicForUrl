@@ -6,7 +6,6 @@ let userPlaylists = [];
 let playlistPage = 1;
 let playlistTotal = 0;
 let isLoadingPlaylists = false;
-// 个人中心分页：每页 5 条（歌单/收藏/最近播放）
 const PAGE_SIZE = 5;
 
 let userFavorites = [];
@@ -22,11 +21,8 @@ let isLoadingHistory = false;
 let qrKey = '';
 let qrCheckInterval = null;
 
-// =========================
-// SPA 路由（顶部/页脚固定，内容区 AJAX 动态加载）
-// =========================
 const SPA_VIEW_CONTAINER_ID = 'appView';
-const SPA_VIEW_CACHE = new Map(); // viewName -> html
+const SPA_VIEW_CACHE = new Map();
 let lastAutoPlayId = null;
 let lastGeneratedUrl = '';
 
@@ -52,7 +48,6 @@ function isUserViewActive() {
 function navigate(path, { replace = false } = {}) {
   if (!path) return;
 
-  // 仅 SPA 容器存在时才接管（避免影响 password.html 等页面）
   if (!hasSpaContainer()) {
     window.location.href = path;
     return;
@@ -82,7 +77,6 @@ async function fetchViewHtml(view) {
 function animateViewEnter(container) {
   if (!container) return;
   container.classList.remove('view-enter');
-  // 强制重排，确保动画可重复触发
   void container.offsetWidth;
   container.classList.add('view-enter');
 }
@@ -123,7 +117,6 @@ function interceptInternalLinks() {
     if (/^(https?:|mailto:|tel:)/i.test(href)) return;
     if (href.startsWith('#')) return;
 
-    // 仅拦截站内路由
     if (!href.startsWith('/')) return;
     if (href.startsWith('/api/') || href.startsWith('/includes/') || href.startsWith('/views/')) return;
 
@@ -169,13 +162,11 @@ async function maybeAutoplayFromUrl() {
 function onViewMounted(view) {
   if (view === 'home') {
     maybeRestoreHomeState();
-    // 允许通过 /?play=xxx 触发自动生成
     maybeAutoplayFromUrl();
     return;
   }
 
   if (view === 'user') {
-    // 未登录则回到首页并弹登录框（如果弹窗尚未加载，会在 footer 注入后可再次点击登录）
     if (!token) {
       showToast('请先登录', 'error');
       showLogin();
@@ -183,7 +174,6 @@ function onViewMounted(view) {
       return;
     }
 
-    // 默认加载“我的歌单”
     if (typeof switchPersonalTab === 'function') {
       switchPersonalTab('playlists');
     }
@@ -198,7 +188,6 @@ function initSpa() {
   renderCurrentRoute();
 }
 
-// Init
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   loadIncludes();
@@ -214,8 +203,8 @@ async function loadIncludes() {
       const res = await fetch('/includes/header.html');
       if (res.ok) {
         headerPlaceholder.outerHTML = await res.text();
-        initTheme(); // Re-sync theme toggle
-        if (token) checkLoginStatus(); // Update user UI in header
+        initTheme();
+        if (token) checkLoginStatus();
       }
     } catch (e) {
       console.error('Failed to load header', e);
@@ -234,7 +223,6 @@ async function loadIncludes() {
   }
 }
 
-// Theme Logic
 function initTheme() {
   const savedTheme = localStorage.getItem('theme');
   const toggle = document.getElementById('themeToggle');
@@ -259,7 +247,6 @@ function toggleTheme() {
   }
 }
 
-// Modal Logic
 function showAbout() {
   const modal = document.getElementById('aboutModal');
   if (modal) modal.classList.add('show');
@@ -270,7 +257,6 @@ function hideAbout() {
   if (modal) modal.classList.remove('show');
 }
 
-// Personal Center Tabs
 function switchPersonalTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
@@ -285,7 +271,6 @@ function switchPersonalTab(tab) {
     if (userPlaylists.length === 0) {
       loadUserPlaylists(1);
     } else {
-      // SPA 场景：切换页面会替换 DOM，需要把已有数据重新渲染到新容器里
       renderPlaylists();
       renderPagination('playlistsPagination', playlistTotal, playlistPage, PAGE_SIZE, 'loadUserPlaylists');
     }
@@ -306,7 +291,6 @@ function switchPersonalTab(tab) {
   }
 }
 
-// HTML Utils
 function escapeHtml(str) {
   if (!str) return '';
   const div = document.createElement('div');
@@ -323,12 +307,10 @@ function escapeUrl(url) {
   return escapeHtml(str);
 }
 
-// 外链图片：优先直连（避免线上 Nginx 对 /api/img 的 502 问题），必要时再考虑代理方案
 function imageSrc(url) {
   const str = (url == null) ? '' : String(url).trim();
   if (!str) return '/placeholder.svg';
 
-  // 使用 URL 做一次更严格的校验，并强制 https，避免 https 页面加载 http 图片被浏览器拦截
   let u;
   try {
     u = new URL(str);
@@ -338,13 +320,10 @@ function imageSrc(url) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return '/placeholder.svg';
   if (u.protocol === 'http:') u.protocol = 'https:';
 
-  // 注意：这里返回的是会被插入到 HTML 属性里的字符串，必须转义
   return escapeHtml(u.toString());
 }
 
-// Toast
 function showToast(message, type = 'success') {
-  // 只保留“复制成功”提示，其余全部静默
   if (message !== '复制成功' && message !== '链接已复制') return;
   const toast = document.getElementById('toast');
   if (!toast) return;
@@ -353,7 +332,6 @@ function showToast(message, type = 'success') {
   setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
-// API Helper
 async function api(path, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['X-Token'] = token;
@@ -365,7 +343,6 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-// Auth
 async function checkLoginStatus() {
   const res = await api('/auth/status');
   if (res.success && res.data.logged) {
@@ -411,7 +388,6 @@ function logout(notify = true) {
   if (notify) showToast('已退出登录');
 }
 
-// Login Modal
 function showLogin() {
   const modal = document.getElementById('loginModal');
   if (modal) {
@@ -455,7 +431,6 @@ async function loadQRCode() {
   const status = document.getElementById('qrStatus');
   if (!img || !status) return;
   
-  // 避免空 src 触发对当前页面的错误请求
   img.src = '/placeholder.svg';
   status.textContent = '加载中...';
   
@@ -595,7 +570,6 @@ async function loginWithCookie() {
   }
 }
 
-// Playlist Logic (Shared)
 async function generatePlaylist() {
   if (!token) return showToast('请先登录', 'error');
   
@@ -640,7 +614,6 @@ function copyUrl() {
   });
 }
 
-// Pagination Renderer
 function renderPagination(containerId, total, page, pageSize, callbackName) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -653,12 +626,9 @@ function renderPagination(containerId, total, page, pageSize, callbackName) {
   
   let html = '';
   
-  // Prev
   html += `<button class="page-btn" onclick="${callbackName}(${page - 1})" ${page === 1 ? 'disabled' : ''}>&lt;</button>`;
   
-  // Pages
-  // Strategy: 1 ... 4 5 [6] 7 8 ... 20
-  const range = 2; // Neighbors
+  const range = 2;
   
   for (let i = 1; i <= totalPages; i++) {
     if (i === 1 || i === totalPages || (i >= page - range && i <= page + range)) {
@@ -668,13 +638,11 @@ function renderPagination(containerId, total, page, pageSize, callbackName) {
     }
   }
   
-  // Next
   html += `<button class="page-btn" onclick="${callbackName}(${page + 1})" ${page === totalPages ? 'disabled' : ''}>&gt;</button>`;
   
   container.innerHTML = html;
 }
 
-// List Loading Logic (User Page)
 async function loadUserPlaylists(page = 1) {
   if (isLoadingPlaylists) return;
   const list = document.getElementById('playlistsList');
@@ -684,7 +652,7 @@ async function loadUserPlaylists(page = 1) {
   playlistPage = page;
   
   list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
-  document.getElementById('playlistsPagination').innerHTML = ''; // Clear paging while loading
+  document.getElementById('playlistsPagination').innerHTML = '';
   
   const offset = (page - 1) * PAGE_SIZE;
   const res = await api(`/playlist/user?offset=${offset}&limit=${PAGE_SIZE}`);
@@ -874,7 +842,7 @@ async function addFavorite() {
   if (res.success) {
     showToast('收藏成功');
     updateFavoriteBtn();
-    if (document.getElementById('favoritesList')) loadFavorites(1); // Refresh user page
+    if (document.getElementById('favoritesList')) loadFavorites(1);
   } else {
     showToast(res.message || '收藏失败', 'error');
   }
@@ -892,7 +860,6 @@ async function removeFavorite(playlistId, updateBtn = false) {
 async function playFavorite(playlistId) {
   const id = encodeURIComponent(String(playlistId || ''));
 
-  // 从个人中心点击“生成/播放”，切回首页并自动生成
   if (isUserViewActive()) {
     navigate(`/?play=${id}`);
     return;

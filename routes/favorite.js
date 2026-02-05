@@ -3,12 +3,10 @@ const router = express.Router();
 const { favoriteOps } = require('../lib/db');
 const { auth } = require('../lib/auth');
 
-// 参数校验：纯数字ID（避免奇怪输入污染存储/前端渲染）
 function isValidNumericId(id) {
   return typeof id === 'string' && /^\d+$/.test(id) && id.length <= 20;
 }
 
-// 获取收藏列表
 router.get('/', auth, (req, res) => {
   const rawLimit = parseInt(req.query.limit, 10);
   const rawOffset = parseInt(req.query.offset, 10);
@@ -37,7 +35,6 @@ router.get('/', auth, (req, res) => {
   }
 });
 
-// 添加收藏
 router.post('/', auth, (req, res) => {
   const { playlistId, playlistName, playlistCover, nickname } = req.body;
   const pid = String(playlistId || '').trim();
@@ -65,7 +62,6 @@ router.post('/', auth, (req, res) => {
   }
 });
 
-// 删除收藏
 router.delete('/:playlistId', auth, (req, res) => {
   const pid = String(req.params.playlistId || '').trim();
   if (!isValidNumericId(pid)) {
@@ -81,7 +77,6 @@ router.delete('/:playlistId', auth, (req, res) => {
   }
 });
 
-// 检查是否已收藏
 router.get('/check/:playlistId', auth, (req, res) => {
   const pid = String(req.params.playlistId || '').trim();
   if (!isValidNumericId(pid)) {
