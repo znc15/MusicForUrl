@@ -257,19 +257,19 @@ router.get('/url', auth, (req, res) => {
   res.json({
     success: true,
     data: {
-      url: hlsUrl,
+      url: liteUrl,
       urls: [
         {
           type: 'lite',
-          label: '轻量 M3U8（直链列表，省资源）',
+          label: '轻量 M3U8（优先推荐）',
           url: liteUrl,
-          note: '更省服务器资源；在部分播放器/环境（含部分 VRChat 播放器）可用，但不保证兼容；如遇不播放请切换 HLS'
+          note: '大部分 VRChat 播放器可用；但不会显示视频画面（仅音频），兼容性仍取决于播放器实现。若遇不播放再切换 HLS。'
         },
         {
           type: 'hls',
-          label: 'HLS（转码分片，VRChat/播放器推荐）',
+          label: 'HLS（转码分片，兼容更稳）',
           url: hlsUrl,
-          note: '更吃 CPU/磁盘，但播放器更稳'
+          note: '会消耗更多 CPU/磁盘；当轻量模式无法播放时再使用。'
         }
       ],
       default: 'lite'
