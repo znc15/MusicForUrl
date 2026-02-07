@@ -21,6 +21,17 @@ let isLoadingHistory = false;
 let qrKey = '';
 let qrCheckInterval = null;
 
+let currentPlatform = 'netease';
+let qqToken = localStorage.getItem('qqToken') || '';
+let qqCurrentUser = null;
+let qqQrKey = '';
+let qqQrCheckInterval = null;
+let qqUserPlaylists = [];
+let qqPlaylistPage = 1;
+let qqPlaylistTotal = 0;
+let isLoadingQQPlaylists = false;
+let loginPlatform = 'netease';
+
 const SPA_VIEW_CONTAINER_ID = 'appView';
 const SPA_VIEW_CACHE = new Map();
 let lastAutoPlayId = null;
@@ -40,7 +51,7 @@ function resolveViewFromPath(pathname) {
 
 function viewTitle(view) {
   if (view === 'user') return '个人中心 - MusicForUrl';
-  return '网易云 → VRChat';
+  return 'MusicForUrl';
 }
 
 function isUserViewActive() {
@@ -204,6 +215,9 @@ async function maybeAutoplayFromUrl() {
   if (playId === lastAutoPlayId) return;
   lastAutoPlayId = playId;
 
+  const platform = urlParams.get('platform');
+  if (platform && platform !== currentPlatform) switchPlatform(platform);
+
   const input = document.getElementById('playlistInput');
   if (!input) return;
   input.value = playId;
@@ -212,19 +226,21 @@ async function maybeAutoplayFromUrl() {
 
 function onViewMounted(view) {
   if (view === 'home') {
+    restorePlatformTab();
     maybeRestoreHomeState();
     maybeAutoplayFromUrl();
     return;
   }
 
   if (view === 'user') {
-    if (!token) {
+    if (!token && !qqToken) {
       showToast('请先登录', 'error');
       showLogin();
       navigate('/', { replace: true });
       return;
     }
 
+    renderAccountCards();
     if (typeof switchPersonalTab === 'function') {
       switchPersonalTab('playlists');
     }
@@ -256,6 +272,7 @@ async function loadIncludes() {
         headerPlaceholder.outerHTML = await res.text();
         initTheme();
         if (token) checkLoginStatus();
+        if (qqToken) checkQQLoginStatus();
       }
     } catch (e) {
       console.error('Failed to load header', e);
@@ -319,11 +336,10 @@ function switchPersonalTab(tab) {
   if (tabContent) tabContent.classList.add('active');
   
   if (tab === 'playlists') {
-    if (userPlaylists.length === 0) {
-      loadUserPlaylists(1);
+    if (userPlaylists.length === 0 && qqUserPlaylists.length === 0) {
+      loadAllPlaylists(1);
     } else {
-      renderPlaylists();
-      renderPagination('playlistsPagination', playlistTotal, playlistPage, PAGE_SIZE, 'loadUserPlaylists');
+      renderAllPlaylists();
     }
   } else if (tab === 'favorites') {
     if (userFavorites.length === 0) {
@@ -394,6 +410,54 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+async function qqApi(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (qqToken) headers['X-QQ-Token'] = qqToken;
+  const res = await fetch('/api/qq' + path, {
+    ...options,
+    headers: { ...headers, ...options.headers }
+  });
+  return res.json();
+}
+
+function switchPlatform(platform) {
+  if (currentPlatform === platform) return;
+  currentPlatform = platform;
+
+  const nBtn = document.getElementById('platformNetease');
+  const qBtn = document.getElementById('platformQQ');
+  if (nBtn) nBtn.classList.toggle('active', platform === 'netease');
+  if (qBtn) qBtn.classList.toggle('active', platform === 'qq');
+
+  const input = document.getElementById('playlistInput');
+  if (input) {
+    input.value = '';
+    input.placeholder = platform === 'qq'
+      ? '粘贴QQ音乐歌单链接或ID'
+      : '粘贴网易云歌单链接或ID';
+  }
+
+  const result = document.getElementById('resultSection');
+  if (result) result.classList.remove('show');
+  currentPlaylist = null;
+  lastGeneratedUrl = '';
+  lastGeneratedUrls = [];
+}
+
+function restorePlatformTab() {
+  const nBtn = document.getElementById('platformNetease');
+  const qBtn = document.getElementById('platformQQ');
+  if (nBtn) nBtn.classList.toggle('active', currentPlatform === 'netease');
+  if (qBtn) qBtn.classList.toggle('active', currentPlatform === 'qq');
+
+  const input = document.getElementById('playlistInput');
+  if (input) {
+    input.placeholder = currentPlatform === 'qq'
+      ? '粘贴QQ音乐歌单链接或ID'
+      : '粘贴网易云歌单链接或ID';
+  }
+}
+
 async function checkLoginStatus() {
   const res = await api('/auth/status');
   if (res.success && res.data.logged) {
@@ -408,23 +472,42 @@ function updateUserUI() {
   const area = document.getElementById('userArea');
   if (!area) return;
 
-  if (currentUser) {
-    const vipBadge = currentUser.vipType > 0 
-      ? `<span class="vip-badge">${currentUser.vipType === 11 ? '黑胶' : 'VIP'}</span>` 
-      : '';
-    const safeAvatar = imageSrc(currentUser.avatar);
-    const safeNickname = escapeHtml(currentUser.nickname);
-    area.innerHTML = `
-      <div class="user-info" onclick="navigate('/user')" title="进入个人中心">
-        <img class="user-avatar" src="${safeAvatar}" alt="" referrerpolicy="no-referrer" loading="lazy">
-        <span class="user-name">${safeNickname}</span>
-        ${vipBadge}
-      </div>
-    `;
-  } else {
+  const hasNetease = !!currentUser;
+  const hasQQ = !!qqCurrentUser;
+
+  if (!hasNetease && !hasQQ) {
     area.innerHTML = `<button class="btn btn-primary" onclick="showLogin()">登录</button>`;
     if (isUserViewActive()) navigate('/', { replace: true });
+    return;
   }
+
+  if (hasNetease && hasQQ) {
+    const av1 = imageSrc(currentUser.avatar);
+    const av2 = imageSrc(qqCurrentUser.avatar);
+    area.innerHTML = `
+      <div class="user-multi" onclick="navigate('/user')" title="进入个人中心">
+        <div class="user-avatars-stack">
+          <img class="user-avatar user-avatar-back" src="${av1}" alt="" referrerpolicy="no-referrer" loading="lazy">
+          <img class="user-avatar user-avatar-front" src="${av2}" alt="" referrerpolicy="no-referrer" loading="lazy">
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const user = hasNetease ? currentUser : qqCurrentUser;
+  const safeAvatar = imageSrc(user.avatar);
+  const safeNickname = escapeHtml(user.nickname);
+  const vipBadge = (hasNetease && user.vipType > 0)
+    ? `<span class="vip-badge">${user.vipType === 11 ? '黑胶' : 'VIP'}</span>`
+    : '';
+  area.innerHTML = `
+    <div class="user-info" onclick="navigate('/user')" title="进入个人中心">
+      <img class="user-avatar" src="${safeAvatar}" alt="" referrerpolicy="no-referrer" loading="lazy">
+      <span class="user-name">${safeNickname}</span>
+      ${vipBadge}
+    </div>
+  `;
 }
 
 function logout(notify = true) {
@@ -436,14 +519,14 @@ function logout(notify = true) {
   userPlaylists = [];
   localStorage.removeItem('token');
   updateUserUI();
-  if (notify) showToast('已退出登录');
+  if (notify) showToast('已退出网易云登录');
 }
 
-function showLogin() {
+function showLogin(platform) {
   const modal = document.getElementById('loginModal');
   if (modal) {
     modal.classList.add('show');
-    switchLoginTab('qrcode');
+    switchLoginPlatform(platform || currentPlatform || 'netease');
   }
 }
 
@@ -454,18 +537,50 @@ function hideLogin() {
     clearInterval(qrCheckInterval);
     qrCheckInterval = null;
   }
+  if (qqQrCheckInterval) {
+    clearInterval(qqQrCheckInterval);
+    qqQrCheckInterval = null;
+  }
+}
+
+function switchLoginPlatform(platform) {
+  loginPlatform = platform;
+
+  const nBtn = document.getElementById('loginPlatformNetease');
+  const qBtn = document.getElementById('loginPlatformQQ');
+  if (nBtn) nBtn.classList.toggle('active', platform === 'netease');
+  if (qBtn) qBtn.classList.toggle('active', platform === 'qq');
+
+  const nPanel = document.getElementById('neteaseLoginPanel');
+  const qPanel = document.getElementById('qqLoginPanel');
+  if (nPanel) nPanel.style.display = platform === 'netease' ? '' : 'none';
+  if (qPanel) qPanel.style.display = platform === 'qq' ? '' : 'none';
+
+  const title = document.getElementById('loginModalTitle');
+  if (title) title.textContent = platform === 'qq' ? '登录QQ音乐' : '登录网易云';
+
+  if (platform === 'netease') {
+    switchLoginTab('qrcode');
+    if (qqQrCheckInterval) { clearInterval(qqQrCheckInterval); qqQrCheckInterval = null; }
+  } else {
+    loadQQQRCode();
+    if (qrCheckInterval) { clearInterval(qrCheckInterval); qrCheckInterval = null; }
+  }
 }
 
 function switchLoginTab(tab) {
-  document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.login-content').forEach(c => c.classList.remove('active'));
-  
+  const panel = document.getElementById('neteaseLoginPanel');
+  if (!panel) return;
+
+  panel.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+  panel.querySelectorAll('.login-content').forEach(c => c.classList.remove('active'));
+
   const tabs = ['qrcode', 'captcha', 'password', 'cookie'];
   const index = tabs.indexOf(tab);
-  
-  const tabBtns = document.querySelectorAll('.login-tab');
+
+  const tabBtns = panel.querySelectorAll('.login-tab');
   if (tabBtns[index]) tabBtns[index].classList.add('active');
-  
+
   const content = document.getElementById(tab + 'Content');
   if (content) content.classList.add('active');
 
@@ -621,24 +736,123 @@ async function loginWithCookie() {
   }
 }
 
+async function loadQQQRCode() {
+  const img = document.getElementById('qqQrCodeImg');
+  const status = document.getElementById('qqQrStatus');
+  if (!img || !status) return;
+
+  img.src = '/placeholder.svg';
+  status.textContent = '加载中...';
+
+  const res = await qqApi('/auth/qrcode');
+  if (!res.success) {
+    status.textContent = '获取失败，请重试';
+    return;
+  }
+
+  qqQrKey = res.data.key;
+  img.src = res.data.qrimg;
+  status.textContent = '请使用QQ扫码';
+
+  if (qqQrCheckInterval) clearInterval(qqQrCheckInterval);
+  qqQrCheckInterval = setInterval(checkQQQRCode, 2000);
+}
+
+async function checkQQQRCode() {
+  if (!qqQrKey) return;
+  let res;
+  try {
+    res = await qqApi('/auth/qrcode/check?key=' + qqQrKey);
+  } catch (e) {
+    console.error('QQ扫码轮询请求失败:', e);
+    return;
+  }
+  const status = document.getElementById('qqQrStatus');
+
+  if (res.success === false) {
+    const message = res.message || (res.code === 804
+      ? '登录成功但会话初始化失败，请重试扫码'
+      : '二维码已失效');
+    if (status) status.textContent = message.includes('刷新') ? message : `${message}，正在刷新…`;
+    if (res.code === 804) {
+      showToast(message, 'error');
+    }
+    clearInterval(qqQrCheckInterval);
+    setTimeout(loadQQQRCode, 1000);
+  } else if (res.code === 800) {
+    if (status) status.textContent = '二维码过期，请刷新';
+    clearInterval(qqQrCheckInterval);
+    setTimeout(loadQQQRCode, 1000);
+  } else if (res.code === 801) {
+    if (status) status.textContent = '请使用QQ扫码';
+  } else if (res.code === 802) {
+    if (status) status.textContent = '扫码成功，请确认';
+  } else if (res.code === 804) {
+    const message = res.message || '登录成功但会话初始化失败，请重试扫码';
+    if (status) status.textContent = `${message}，正在刷新…`;
+    showToast(message, 'error');
+    clearInterval(qqQrCheckInterval);
+    setTimeout(loadQQQRCode, 1000);
+  } else if (res.code === 803) {
+    clearInterval(qqQrCheckInterval);
+    qqToken = res.data.token;
+    qqCurrentUser = res.data.user;
+    localStorage.setItem('qqToken', qqToken);
+    hideLogin();
+    updateUserUI();
+    showToast('QQ音乐登录成功');
+    navigate('/user');
+  } else {
+    console.warn('QQ扫码未知状态:', res);
+  }
+}
+
+async function checkQQLoginStatus() {
+  const res = await qqApi('/auth/status');
+  if (res.success && res.data.logged) {
+    qqCurrentUser = res.data.user;
+    updateUserUI();
+  } else {
+    logoutQQ(false);
+  }
+}
+
+function logoutQQ(notify = true) {
+  if (qqToken) {
+    qqApi('/auth/logout', { method: 'POST' });
+  }
+  qqToken = '';
+  qqCurrentUser = null;
+  qqUserPlaylists = [];
+  localStorage.removeItem('qqToken');
+  updateUserUI();
+  if (notify) showToast('已退出QQ音乐登录');
+}
+
 async function generatePlaylist() {
-  if (!token) return showToast('请先登录', 'error');
-  
+  if (currentPlatform === 'qq') {
+    if (!qqToken) return showToast('请先登录QQ音乐', 'error');
+  } else {
+    if (!token) return showToast('请先登录网易云', 'error');
+  }
+
   const input = document.getElementById('playlistInput').value.trim();
   if (!input) return showToast('请输入链接', 'error');
-  
+
   const btn = document.getElementById('generateBtn');
   const originalText = btn.innerHTML;
   btn.innerHTML = '<span class="loading"></span>';
   btn.disabled = true;
-  
+
   try {
-    const parseRes = await api('/playlist/parse?url=' + encodeURIComponent(input));
+    const callApi = currentPlatform === 'qq' ? qqApi : api;
+    const parseRes = await callApi('/playlist/parse?url=' + encodeURIComponent(input));
     if (!parseRes.success) throw new Error(parseRes.message);
-    
+
     currentPlaylist = parseRes.data;
-    
-    const urlRes = await api('/playlist/url?id=' + currentPlaylist.id);
+    currentPlaylist._platform = currentPlatform;
+
+    const urlRes = await callApi('/playlist/url?id=' + currentPlaylist.id);
     if (!urlRes.success) throw new Error(urlRes.message);
     
     document.getElementById('playlistCover').src = imageSrc(currentPlaylist.cover);
@@ -921,17 +1135,20 @@ async function removeFavorite(playlistId, updateBtn = false) {
   }
 }
 
-async function playFavorite(playlistId) {
+async function playFavorite(playlistId, platform) {
   const id = encodeURIComponent(String(playlistId || ''));
+  const p = platform || 'netease';
 
   if (isUserViewActive()) {
-    navigate(`/?play=${id}`);
+    navigate(`/?play=${id}&platform=${p}`);
     return;
   }
 
+  if (p !== currentPlatform) switchPlatform(p);
+
   const input = document.getElementById('playlistInput');
   if (!input) {
-    navigate(`/?play=${id}`);
+    navigate(`/?play=${id}&platform=${p}`);
     return;
   }
 
@@ -947,4 +1164,122 @@ function formatTime(dateStr) {
   if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
   if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
   return Math.floor(diff / 86400000) + '天前';
+}
+
+function renderAccountCards() {
+  const nBody = document.getElementById('neteaseAccountBody');
+  const qBody = document.getElementById('qqAccountBody');
+
+  if (nBody) {
+    if (currentUser) {
+      const av = imageSrc(currentUser.avatar);
+      const name = escapeHtml(currentUser.nickname);
+      nBody.innerHTML = `
+        <img class="user-avatar" src="${av}" alt="" referrerpolicy="no-referrer" loading="lazy">
+        <span class="account-name">${name}</span>
+        <button class="btn btn-ghost" style="padding:0.3rem 0.6rem;font-size:0.8rem;" onclick="logout()">退出</button>
+      `;
+    } else {
+      nBody.innerHTML = `<button class="btn btn-primary" style="padding:0.4rem 0.8rem;font-size:0.85rem;" onclick="showLogin('netease')">登录</button>`;
+    }
+  }
+
+  if (qBody) {
+    if (qqCurrentUser) {
+      const av = imageSrc(qqCurrentUser.avatar);
+      const name = escapeHtml(qqCurrentUser.nickname);
+      qBody.innerHTML = `
+        <img class="user-avatar" src="${av}" alt="" referrerpolicy="no-referrer" loading="lazy">
+        <span class="account-name">${name}</span>
+        <button class="btn btn-ghost" style="padding:0.3rem 0.6rem;font-size:0.8rem;" onclick="logoutQQ()">退出</button>
+      `;
+    } else {
+      qBody.innerHTML = `<button class="btn btn-primary" style="padding:0.4rem 0.8rem;font-size:0.85rem;" onclick="showLogin('qq')">登录</button>`;
+    }
+  }
+}
+
+async function loadAllPlaylists(page = 1) {
+  const list = document.getElementById('playlistsList');
+  if (!list) return;
+
+  if ((userPlaylists.length > 0 || qqUserPlaylists.length > 0) && page !== 0) {
+    playlistPage = page;
+    renderAllPlaylists();
+    return;
+  }
+
+  if (isLoadingPlaylists) return;
+  isLoadingPlaylists = true;
+
+  list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
+  document.getElementById('playlistsPagination').innerHTML = '';
+
+  const promises = [];
+  if (token) promises.push(loadUserPlaylistsData());
+  if (qqToken) promises.push(loadQQUserPlaylistsData());
+
+  await Promise.all(promises);
+  isLoadingPlaylists = false;
+
+  playlistPage = page === 0 ? 1 : page;
+  renderAllPlaylists();
+}
+
+async function loadUserPlaylistsData() {
+  const res = await api('/playlist/user?offset=0&limit=100');
+  if (res.success) {
+    userPlaylists = (res.data || []).map(p => ({ ...p, _platform: 'netease' }));
+  }
+}
+
+async function loadQQUserPlaylistsData() {
+  const res = await qqApi('/playlist/user?offset=0&limit=100');
+  if (res.success) {
+    qqUserPlaylists = (res.data || []).map(p => ({ ...p, _platform: 'qq' }));
+  }
+}
+
+function renderAllPlaylists() {
+  const list = document.getElementById('playlistsList');
+  if (!list) return;
+
+  const all = [...userPlaylists, ...qqUserPlaylists];
+  playlistTotal = all.length;
+
+  if (all.length === 0) {
+    list.innerHTML = '<div class="empty">暂无歌单</div>';
+    document.getElementById('playlistsPagination').innerHTML = '';
+    return;
+  }
+
+  const offset = (playlistPage - 1) * PAGE_SIZE;
+  const pageData = all.slice(offset, offset + PAGE_SIZE);
+
+  const items = pageData.map(p => {
+    const safeCover = imageSrc(p.cover);
+    const safeName = escapeHtml(p.name);
+    const safeId = escapeHtml(String(p.id));
+    const count = p.trackCount || p.songCount || 0;
+    const isQQ = p._platform === 'qq';
+    const badge = isQQ
+      ? '<span class="platform-badge-sm qq">QQ</span>'
+      : '<span class="platform-badge-sm netease">网易云</span>';
+    const platform = isQQ ? "'qq'" : "'netease'";
+    return `
+      <div class="list-item">
+        <img class="item-cover" src="${safeCover}" alt="" referrerpolicy="no-referrer" loading="lazy">
+        <div class="item-info">
+          <div class="item-name">${safeName}</div>
+          <div class="item-meta">${badge} ${count}首 · ID: ${safeId}</div>
+        </div>
+        <div class="item-actions">
+          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safeId}', ${platform})">生成</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  list.innerHTML = items;
+  renderPagination('playlistsPagination', playlistTotal, playlistPage, PAGE_SIZE, 'loadAllPlaylists');
 }

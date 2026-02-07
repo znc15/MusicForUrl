@@ -149,6 +149,13 @@ if (process.env.SITE_PASSWORD) {
       return next();
     }
 
+    if (req.path.startsWith('/api/qq/song/')) {
+      return next();
+    }
+    if (req.path.startsWith('/api/qq/playlist/m3u8/') && req.path.endsWith('.m3u8')) {
+      return next();
+    }
+
     if (isPublicAssetPath(req.path)) {
       return next();
     }
@@ -190,6 +197,12 @@ app.use('/api/img', require('./routes/img'));
 app.use('/api/hls', hlsStreamLimiter, hlsSegmentLimiter, require('./routes/hls'));
 app.use('/api/favorites', require('./routes/favorite'));
 app.use('/api/history', require('./routes/history'));
+
+app.use('/api/qq/auth/login', authLimiter);
+app.use('/api/qq/auth', require('./routes/qq-auth'));
+app.use('/api/qq/playlist/parse', parseLimiter);
+app.use('/api/qq/playlist', require('./routes/qq-playlist'));
+app.use('/api/qq/song', require('./routes/qq-song'));
 
 app.use('/api', (req, res) => {
   res.status(404).json({ 

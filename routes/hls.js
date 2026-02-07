@@ -177,6 +177,13 @@ const DEFAULT_DOWNLOAD_ALLOW_PATTERNS = [
   /^m\d+[a-z]*\.music\.126\.net$/i,
   /^p\d+\.music\.126\.net$/i,
   /^music\.126\.net$/i,
+  // QQ 音乐域名
+  /^[a-z0-9]+\.y\.qq\.com$/i,
+  /^y\.gtimg\.cn$/i,
+  /^[a-z0-9]+\.stream\.qqmusic\.qq\.com$/i,
+  /^dl\.stream\.qqmusic\.qq\.com$/i,
+  /^isure\.stream\.qqmusic\.qq\.com$/i,
+  /^ws\.stream\.qqmusic\.qq\.com$/i,
 ];
 
 function parseExtraAllowPatterns() {

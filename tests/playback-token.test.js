@@ -37,6 +37,19 @@ test('rejects token on playlist mismatch', () => {
   assert.equal(verified.ok, false);
 });
 
+test('ignores empty playlist constraint when verifying token', () => {
+  const token = createPlaybackToken({
+    userId: 7,
+    playlistId: '12345',
+    ttlSeconds: 300
+  });
+
+  const verified = verifyPlaybackToken(token, { playlistId: '' });
+
+  assert.equal(verified.ok, true);
+  assert.equal(verified.playlistId, '12345');
+});
+
 test('rejects expired token', () => {
   const nowMs = Date.now();
   const token = createPlaybackToken({

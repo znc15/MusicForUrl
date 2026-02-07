@@ -8,8 +8,18 @@
   <!-- Login Modal -->
   <div class="modal-overlay" id="loginModal">
     <div class="modal">
-      <div class="modal-title">登录网易云</div>
-      
+      <div class="modal-title" id="loginModalTitle">登录</div>
+
+      <!-- 平台选择 -->
+      <div class="login-platform-tabs" id="loginPlatformTabs">
+        <button class="login-platform-tab active" id="loginPlatformNetease"
+                onclick="switchLoginPlatform('netease')">网易云音乐</button>
+        <button class="login-platform-tab" id="loginPlatformQQ"
+                onclick="switchLoginPlatform('qq')">QQ音乐</button>
+      </div>
+
+      <!-- 网易云登录面板 -->
+      <div id="neteaseLoginPanel">
       <div class="login-tabs">
         <button class="login-tab active" onclick="switchLoginTab('qrcode')">扫码</button>
         <button class="login-tab" onclick="switchLoginTab('captcha')">验证码</button>
@@ -62,6 +72,17 @@
         </div>
         <button class="btn btn-primary" style="width: 100%;" onclick="loginWithCookie()">登录</button>
       </div>
+      </div><!-- /neteaseLoginPanel -->
+
+      <!-- QQ音乐登录面板 -->
+      <div id="qqLoginPanel" style="display: none;">
+        <div class="login-content active" id="qqQrcodeContent">
+          <div class="qr-code">
+            <img id="qqQrCodeImg" src="/placeholder.svg" alt="QQ音乐二维码" referrerpolicy="no-referrer">
+            <div class="qr-status" id="qqQrStatus">请使用QQ扫码</div>
+          </div>
+        </div>
+      </div><!-- /qqLoginPanel -->
 
       <div class="modal-actions">
         <button class="btn btn-ghost" onclick="hideLogin()">取消</button>
@@ -74,9 +95,9 @@
     <div class="modal">
       <div class="modal-title">关于 MusicForUrl</div>
       <div class="about-content">
-        <p>一个简单、纯净的工具，用于将网易云音乐歌单转换为 VRChat 可播放的链接。</p>
+        <p>一个简单、纯净的工具，用于将网易云音乐/QQ音乐歌单转换为 VRChat 可播放的链接。</p>
         <p><strong>功能特点：</strong></p>
-        <p>• 解析歌单并生成 m3u8 链接<br>• 支持账号登录与收藏夹同步<br>• 自动记录最近播放历史</p>
+        <p>• 支持网易云音乐和QQ音乐双平台<br>• 解析歌单并生成 m3u8 链接<br>• 支持账号登录与收藏夹同步<br>• 自动记录最近播放历史</p>
         <p>项目开源于 GitHub。</p>
       </div>
       <div class="modal-actions">
