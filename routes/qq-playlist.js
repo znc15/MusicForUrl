@@ -5,6 +5,11 @@ const { decrypt } = require('../lib/crypto');
 const { playlistOps, qqUserOps } = require('../lib/db');
 const { qqAuth } = require('../lib/qq-auth-middleware');
 const {
+  buildLiteM3u8,
+  normalizeDurationSeconds,
+  sanitizeM3uTitle
+} = require('../lib/lite-m3u8');
+const {
   createPlaybackToken,
   verifyPlaybackToken,
   isLegacyToken
@@ -53,43 +58,21 @@ function toSqliteDatetime(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
-function sanitizeM3uTitle(text) {
-  return String(text || '')
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
+function buildQQLiteM3u8(baseUrl, token, playlistId, tracks) {
   const list = Array.isArray(tracks) ? tracks : [];
-  const durations = list
-    .map(t => Math.floor(Number(t?.duration) || 0))
-    .filter(n => Number.isFinite(n) && n > 0);
-
-  const target = Math.max(10, ...durations);
-
-  let out = '';
-  out += '#EXTM3U\n';
-  out += '#EXT-X-VERSION:3\n';
-  out += `#EXT-X-TARGETDURATION:${target}\n`;
-  out += '#EXT-X-MEDIA-SEQUENCE:0\n';
-  out += '#EXT-X-PLAYLIST-TYPE:VOD\n';
-
+  const segments = [];
   for (const track of list) {
     // QQ 音乐使用 mid 作为标识
     const mid = track && (track.mid || track.id) ? String(track.mid || track.id) : '';
     if (!mid) continue;
 
-    const duration = Math.max(0, Math.floor(Number(track.duration) || 0));
+    const duration = normalizeDurationSeconds(track.duration);
     const title = sanitizeM3uTitle(`${track.artist ? track.artist + ' - ' : ''}${track.name || mid}`);
     const url =
       `${baseUrl}/api/qq/song/${encodeURIComponent(token)}/${encodeURIComponent(mid)}?playlist=${encodeURIComponent(playlistId)}`;
-    out += `#EXTINF:${duration},${title}\n`;
-    out += `${url}\n`;
+    segments.push({ duration, title, url });
   }
-
-  out += '#EXT-X-ENDLIST\n';
-  return out;
+  return buildLiteM3u8({ segments });
 }
 
 async function ensureQQPlaylistCached(playlistId, cookie) {
@@ -151,7 +134,7 @@ router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
     const { tracks } = await ensureQQPlaylistCached(playlistId, cookie);
 
     const baseUrl = getBaseUrl(req);
-    const m3u8 = buildLiteM3u8(baseUrl, token, playlistId, tracks);
+    const m3u8 = buildQQLiteM3u8(baseUrl, token, playlistId, tracks);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');

@@ -4,6 +4,11 @@ const netease = require('../lib/netease');
 const { decrypt } = require('../lib/crypto');
 const { playlistOps, userOps } = require('../lib/db');
 const {
+  buildLiteM3u8,
+  normalizeDurationSeconds,
+  sanitizeM3uTitle
+} = require('../lib/lite-m3u8');
+const {
   createPlaybackToken,
   verifyPlaybackToken,
   isLegacyToken
@@ -56,42 +61,20 @@ function toSqliteDatetime(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
-function sanitizeM3uTitle(text) {
-  return String(text || '')
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
+function buildNeteaseLiteM3u8(baseUrl, token, playlistId, tracks) {
   const list = Array.isArray(tracks) ? tracks : [];
-  const durations = list
-    .map(t => Math.floor(Number(t?.duration) || 0))
-    .filter(n => Number.isFinite(n) && n > 0);
-
-  const target = Math.max(10, ...durations);
-
-  let out = '';
-  out += '#EXTM3U\n';
-  out += '#EXT-X-VERSION:3\n';
-  out += `#EXT-X-TARGETDURATION:${target}\n`;
-  out += '#EXT-X-MEDIA-SEQUENCE:0\n';
-  out += '#EXT-X-PLAYLIST-TYPE:VOD\n';
-
+  const segments = [];
   for (const track of list) {
     const id = track && track.id != null ? String(track.id) : '';
     if (!/^\d+$/.test(id)) continue;
 
-    const duration = Math.max(0, Math.floor(Number(track.duration) || 0));
+    const duration = normalizeDurationSeconds(track.duration);
     const title = sanitizeM3uTitle(`${track.artist ? track.artist + ' - ' : ''}${track.name || id}`);
     const url =
       `${baseUrl}/api/song/${encodeURIComponent(token)}/${encodeURIComponent(id)}?playlist=${encodeURIComponent(playlistId)}`;
-    out += `#EXTINF:${duration},${title}\n`;
-    out += `${url}\n`;
+    segments.push({ duration, title, url });
   }
-
-  out += '#EXT-X-ENDLIST\n';
-  return out;
+  return buildLiteM3u8({ segments });
 }
 
 async function ensurePlaylistCached(playlistId, cookie) {
@@ -146,7 +129,7 @@ router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
     const { tracks } = await ensurePlaylistCached(playlistId, cookie);
 
     const baseUrl = getBaseUrl(req);
-    const m3u8 = buildLiteM3u8(baseUrl, token, playlistId, tracks);
+    const m3u8 = buildNeteaseLiteM3u8(baseUrl, token, playlistId, tracks);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');
