@@ -117,3 +117,49 @@ test('checkQRCode 对无法解析的响应返回 code=-1', async () => {
     global.fetch = originalFetch;
   }
 });
+
+test('getPlaylistDetail 在上游返回异常 code 时透传详细错误信息', async () => {
+  const originalFetch = global.fetch;
+
+  global.fetch = async () => createMockResponse({
+    text: JSON.stringify({ code: -1, subcode: 0, cdlist: [] })
+  });
+
+  try {
+    await assert.rejects(
+      () => qqmusic.getPlaylistDetail('12345'),
+      /QQ歌单不存在或无访问权限 \(code=-1\)/
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('getPlaylistDetail 支持任意回调名的 JSONP 响应', async () => {
+  const originalFetch = global.fetch;
+
+  const payload = {
+    code: 0,
+    cdlist: [
+      {
+        dissname: '测试歌单',
+        logo: 'https://example.com/cover.jpg',
+        songnum: 0,
+        songlist: []
+      }
+    ]
+  };
+
+  global.fetch = async () => createMockResponse({
+    text: `playlistinfoCallback(${JSON.stringify(payload)})`
+  });
+
+  try {
+    const result = await qqmusic.getPlaylistDetail('12345');
+    assert.equal(result.id, '12345');
+    assert.equal(result.name, '测试歌单');
+    assert.equal(Array.isArray(result.tracks), true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

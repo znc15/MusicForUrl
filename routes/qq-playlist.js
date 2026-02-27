@@ -244,7 +244,9 @@ router.get('/parse', qqAuth, async (req, res) => {
     });
   } catch (e) {
     console.error('解析QQ音乐歌单失败:', e);
-    res.status(500).json({ success: false, message: e.message || '解析歌单失败' });
+    const message = e?.message || '解析歌单失败';
+    const status = /不存在|无访问权限/.test(message) ? 404 : 500;
+    res.status(status).json({ success: false, message });
   }
 });
 
