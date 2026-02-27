@@ -148,6 +148,9 @@ if (process.env.SITE_PASSWORD) {
     if (req.path.startsWith('/api/hls/') && !req.path.startsWith('/api/hls/cache')) {
       return next();
     }
+    if (req.path.startsWith('/api/qq/hls/') && !req.path.startsWith('/api/qq/hls/cache')) {
+      return next();
+    }
 
     if (req.path.startsWith('/api/qq/song/')) {
       return next();
@@ -195,6 +198,7 @@ app.use('/api/playlist', require('./routes/playlist'));
 app.use('/api/song', require('./routes/song'));
 app.use('/api/img', require('./routes/img'));
 app.use('/api/hls', hlsStreamLimiter, hlsSegmentLimiter, require('./routes/hls'));
+app.use('/api/qq/hls', hlsStreamLimiter, hlsSegmentLimiter, require('./routes/hls'));
 app.use('/api/favorites', require('./routes/favorite'));
 app.use('/api/history', require('./routes/history'));
 

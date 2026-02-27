@@ -4,8 +4,9 @@
 
 服务器进行加密存储Cookie，防止用户信息泄露。
 
-生成链接时提供两种输出：
+生成链接时提供三种输出：
 - **轻量 M3U8（直链列表，优先推荐）**：几乎不转码/不落盘，服务器压力更小；大部分 VRChat 播放器可用，但不会显示视频画面（仅音频），兼容性仍取决于播放器实现。
+- **视频轻量 M3U8（随机背景图）**：仍走 HLS 分片链路，但背景图按播放链接随机并固定；图片 API 异常会自动回退歌单封面。
 - **HLS（转码分片）**：兼容性更稳，但会消耗较多 CPU/磁盘（需要 FFmpeg）；当轻量模式无法播放时再切换。
 
 ## 快速开始
@@ -111,6 +112,13 @@ docker compose -f deploy/docker-compose.8c8g.yml --compatibility up -d --build
 |---|---|---|
 | `MUSIC_QUALITY` | `low/medium/high/lossless` | `low` |
 | `MUSIC_BITRATE` | 直接指定码率（bps，优先级低于 `MUSIC_QUALITY` 预设） | - |
+
+### 视频轻量随机背景图
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `LITE_VIDEO_BG_API_URL` | 视频轻量随机背景图 API（支持 302/JSON/纯文本 URL） | `https://api.miaomc.cn/image/get` |
+| `LITE_VIDEO_BG_API_TIMEOUT_MS` | 背景图 API 超时（毫秒） | `8000` |
 
 ### 封面视频
 

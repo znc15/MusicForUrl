@@ -7,9 +7,11 @@ const os = require('os');
 const https = require('https');
 const http = require('http');
 const netease = require('../lib/netease');
+const qqmusic = require('../lib/qqmusic');
 const { decrypt } = require('../lib/crypto');
-const { userOps, playlistOps, playLogOps } = require('../lib/db');
+const { userOps, qqUserOps, playlistOps, playLogOps } = require('../lib/db');
 const { verifyPlaybackToken, isLegacyToken } = require('../lib/playback-token');
+const { getOrBindBg } = require('../lib/lite-video-bg');
 
 function isValidNumericId(id) {
   return typeof id === 'string' && /^\d+$/.test(id) && id.length <= 20;
@@ -19,15 +21,88 @@ function isLikelyToken(token) {
   return typeof token === 'string' && token.length > 0 && token.length <= 1024;
 }
 
-function resolveUserFromAccessToken(token, playlistId) {
+function resolveUserFromAccessToken(token, playlistId, source = 'netease') {
   const raw = String(token || '');
+  const sourceName = source === 'qq' ? 'qq' : 'netease';
+  const tokenStore = sourceName === 'qq' ? qqUserOps : userOps;
   if (isLegacyToken(raw)) {
-    return userOps.getByToken.get(raw) || null;
+    return tokenStore.getByToken.get(raw) || null;
   }
 
   const verified = verifyPlaybackToken(raw, { playlistId: String(playlistId || '') });
   if (!verified.ok) return null;
-  return userOps.getById.get(verified.userId) || null;
+  return tokenStore.getById.get(verified.userId) || null;
+}
+
+function getSourceFromReq(req) {
+  const base = String(req.baseUrl || '');
+  if (base.startsWith('/api/qq/hls')) return 'qq';
+  return 'netease';
+}
+
+function getModeFromReq(req) {
+  const mode = String(req.query.mode || '').trim().toLowerCase();
+  if (mode === 'lite_video') return 'lite_video';
+  return '';
+}
+
+function isLiteVideoMode(mode) {
+  return mode === 'lite_video';
+}
+
+function getPlaylistCacheKey(playlistId, source) {
+  if (source === 'qq') return `qq:${String(playlistId || '')}`;
+  return String(playlistId || '');
+}
+
+function getSongIdForTrack(song, source) {
+  if (source === 'qq') {
+    return String((song && (song.mid || song.id)) || '').trim();
+  }
+  return String((song && song.id) || '').trim();
+}
+
+function isValidSongIdForSource(songId, source) {
+  const raw = String(songId || '').trim();
+  if (!raw) return false;
+  if (source === 'qq') {
+    return /^[A-Za-z0-9]+$/.test(raw) && raw.length <= 64;
+  }
+  return isValidNumericId(raw);
+}
+
+function getScopedSongCacheKey(songId, source, mode) {
+  const sid = String(songId || '').trim();
+  const src = source === 'qq' ? 'qq' : 'netease';
+  const modeKey = isLiteVideoMode(mode) ? 'lite_video' : 'default';
+  return `${src}:${modeKey}:${sid}`;
+}
+
+function getSegmentBasePathForReq(req, token, playlistId) {
+  const source = getSourceFromReq(req);
+  if (source === 'qq') {
+    return `/api/qq/hls/${encodeURIComponent(token)}/${encodeURIComponent(playlistId)}`;
+  }
+  return `/api/hls/${encodeURIComponent(token)}/${encodeURIComponent(playlistId)}`;
+}
+
+function getSourceAdapter(source) {
+  if (source === 'qq') {
+    return {
+      source: 'qq',
+      getSongUrl: (songId, cookie) => qqmusic.getSongUrl(String(songId), cookie),
+      getPlaylistDetail: (playlistId, cookie) => qqmusic.getPlaylistDetail(String(playlistId), cookie),
+      toPlayLogPlaylistId: (playlistId) => `qq:${String(playlistId)}`,
+      toPlayLogSongId: (songId) => `qq:${String(songId)}`
+    };
+  }
+  return {
+    source: 'netease',
+    getSongUrl: (songId, cookie) => netease.getSongUrl(String(songId), cookie),
+    getPlaylistDetail: (playlistId, cookie) => netease.getPlaylistDetail(String(playlistId), cookie),
+    toPlayLogPlaylistId: (playlistId) => String(playlistId),
+    toPlayLogSongId: (songId) => String(songId)
+  };
 }
 
 function isValidSegmentIndex(index) {
@@ -184,6 +259,7 @@ const DEFAULT_DOWNLOAD_ALLOW_PATTERNS = [
   /^dl\.stream\.qqmusic\.qq\.com$/i,
   /^isure\.stream\.qqmusic\.qq\.com$/i,
   /^ws\.stream\.qqmusic\.qq\.com$/i,
+  /^[a-z0-9-]+\.mcobj\.com$/i,
 ];
 
 function parseExtraAllowPatterns() {
@@ -351,21 +427,33 @@ if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
-function getSongCacheDir(songId) {
-  return path.join(CACHE_DIR, String(songId));
+function toFsCacheKey(songCacheKey) {
+  return encodeURIComponent(String(songCacheKey || ''));
 }
 
-function getSegmentPath(songId, segmentIndex) {
-  return path.join(getSongCacheDir(songId), `seg_${String(segmentIndex).padStart(4, '0')}.ts`);
+function fromFsCacheKey(fsKey) {
+  try {
+    return decodeURIComponent(String(fsKey || ''));
+  } catch (_) {
+    return String(fsKey || '');
+  }
 }
 
-function getSegmentInfoPath(songId) {
-  return path.join(getSongCacheDir(songId), 'info.json');
+function getSongCacheDir(songCacheKey) {
+  return path.join(CACHE_DIR, toFsCacheKey(songCacheKey));
 }
 
-function isSongCached(songId) { 
+function getSegmentPath(songCacheKey, segmentIndex) {
+  return path.join(getSongCacheDir(songCacheKey), `seg_${String(segmentIndex).padStart(4, '0')}.ts`);
+}
+
+function getSegmentInfoPath(songCacheKey) {
+  return path.join(getSongCacheDir(songCacheKey), 'info.json');
+}
+
+function isSongCached(songCacheKey) { 
   try { 
-    const infoPath = getSegmentInfoPath(songId); 
+    const infoPath = getSegmentInfoPath(songCacheKey); 
     if (!fs.existsSync(infoPath)) return false; 
      
     const info = JSON.parse(fs.readFileSync(infoPath, 'utf8')); 
@@ -465,13 +553,13 @@ async function cleanupCache(reason = 'interval') {
     for (let i = 0; i < dirents.length; i++) { 
       const entry = dirents[i]; 
       if (!entry.isDirectory()) continue; 
-      const songId = String(entry.name);
+      const songId = fromFsCacheKey(entry.name);
       if (generatingLocks.has(songId)) continue;
 
       // 跳过最近 30 秒内生成的缓存，避免刚生成就被清理的竞态
       const RECENTLY_GENERATED_GRACE_MS = 30 * 1000;
 
-      const songDir = path.join(CACHE_DIR, songId); 
+      const songDir = path.join(CACHE_DIR, entry.name); 
       const infoPath = path.join(songDir, 'info.json'); 
 
       let timestamp = 0; 
@@ -585,18 +673,19 @@ setInterval(() => {
 }, CACHE_CONFIG.cleanupInterval); 
 setTimeout(() => scheduleCacheCleanup('startup'), 5000); 
 
-async function generateSongSegments(songId, audioUrl, coverUrl, songDuration) {
+async function generateSongSegments(songCacheKey, audioUrl, coverUrl, songDuration) {
   const acquired = await jobSemaphore.acquire();
   if (!acquired) {
     throw new Error('服务繁忙，请稍后重试');
   }
   
   const timestamp = Date.now();
-  const tempAudio = path.join(TEMP_DIR, `${songId}_${timestamp}.mp3`);
-  const tempCover = path.join(TEMP_DIR, `${songId}_${timestamp}.jpg`);
-  const songCacheDir = getSongCacheDir(songId);
-  const tempM3u8 = path.join(TEMP_DIR, `${songId}_${timestamp}.m3u8`);
-  const tempSegmentPattern = path.join(TEMP_DIR, `${songId}_${timestamp}_seg_%04d.ts`);
+  const safeTempKey = toFsCacheKey(songCacheKey);
+  const tempAudio = path.join(TEMP_DIR, `${safeTempKey}_${timestamp}.mp3`);
+  const tempCover = path.join(TEMP_DIR, `${safeTempKey}_${timestamp}.jpg`);
+  const songCacheDir = getSongCacheDir(songCacheKey);
+  const tempM3u8 = path.join(TEMP_DIR, `${safeTempKey}_${timestamp}.m3u8`);
+  const tempSegmentPattern = path.join(TEMP_DIR, `${safeTempKey}_${timestamp}_seg_%04d.ts`);
   
   const cleanup = () => {
     fs.unlink(tempAudio, () => {});
@@ -605,7 +694,7 @@ async function generateSongSegments(songId, audioUrl, coverUrl, songDuration) {
     try {
       const tempFiles = fs.readdirSync(TEMP_DIR);
       for (const f of tempFiles) {
-        if (f.startsWith(`${songId}_${timestamp}_seg_`)) {
+        if (f.startsWith(`${safeTempKey}_${timestamp}_seg_`)) {
           fs.unlinkSync(path.join(TEMP_DIR, f));
         }
       }
@@ -622,16 +711,17 @@ async function generateSongSegments(songId, audioUrl, coverUrl, songDuration) {
       fs.mkdirSync(songCacheDir, { recursive: true });
     }
     
-    if (LOG_VERBOSE) console.log(`[分片缓存] 正在下载: ${songId} (并发: ${jobSemaphore.running}/${JOB_LIMITS.maxConcurrentJobs}, 等待: ${jobSemaphore.waiting})`);
+    if (LOG_VERBOSE) console.log(`[分片缓存] 正在下载: ${songCacheKey} (并发: ${jobSemaphore.running}/${JOB_LIMITS.maxConcurrentJobs}, 等待: ${jobSemaphore.waiting})`);
     await Promise.all([
       downloadFile(audioUrl, tempAudio),
       downloadFile(coverUrl, tempCover)
     ]);
     
-    if (LOG_VERBOSE) console.log(`[分片缓存] 正在转码并分片: ${songId}`);
+    if (LOG_VERBOSE) console.log(`[分片缓存] 正在转码并分片: ${songCacheKey}`);
     
     const info = await runFFmpegTranscode({
-      songId,
+      songCacheKey,
+      safeTempKey,
       timestamp,
       tempAudio,
       tempCover,
@@ -651,7 +741,7 @@ async function generateSongSegments(songId, audioUrl, coverUrl, songDuration) {
   }
 }
 
-function runFFmpegTranscode({ songId, timestamp, tempAudio, tempCover, tempM3u8, tempSegmentPattern, songCacheDir }) {
+function runFFmpegTranscode({ songCacheKey, safeTempKey, timestamp, tempAudio, tempCover, tempM3u8, tempSegmentPattern, songCacheDir }) {
   return new Promise((resolve, reject) => {
     const segmentDuration = CACHE_CONFIG.segmentDuration;
     const gop = Math.max(1, Math.round(COVER_FPS * segmentDuration));
@@ -720,7 +810,7 @@ function runFFmpegTranscode({ songId, timestamp, tempAudio, tempCover, tempM3u8,
       if (Date.now() - lastActivityAt <= JOB_LIMITS.ffmpegTimeout) return;
       ffmpegKilled = true;
       try { ffmpegProcess.kill('SIGKILL'); } catch (_) {}
-      console.error(`[分片缓存] FFmpeg无输出超时被终止: ${songId}`);
+      console.error(`[分片缓存] FFmpeg无输出超时被终止: ${songCacheKey}`);
     }, 1000);
     
     ffmpegProcess.on('error', (err) => {
@@ -755,13 +845,13 @@ function runFFmpegTranscode({ songId, timestamp, tempAudio, tempCover, tempM3u8,
         
         const tempFiles = fs.readdirSync(TEMP_DIR); 
         const segmentFiles = tempFiles 
-          .filter(f => f.startsWith(`${songId}_${timestamp}_seg_`) && f.endsWith('.ts')) 
+          .filter(f => f.startsWith(`${safeTempKey}_${timestamp}_seg_`) && f.endsWith('.ts')) 
           .sort(); 
 
         let cacheBytes = 0;
         for (let i = 0; i < segmentFiles.length; i++) { 
           const srcPath = path.join(TEMP_DIR, segmentFiles[i]); 
-          const destPath = getSegmentPath(songId, i); 
+          const destPath = getSegmentPath(songCacheKey, i); 
           try { 
             const stat = fs.statSync(srcPath); 
             cacheBytes += stat.size || 0; 
@@ -771,7 +861,7 @@ function runFFmpegTranscode({ songId, timestamp, tempAudio, tempCover, tempM3u8,
          
         const info = { 
           version: CACHE_VERSION, 
-          songId: songId, 
+          songId: songCacheKey, 
           segmentCount: segmentFiles.length, 
           segmentDurations: segmentDurations, 
           totalDuration: segmentDurations.reduce((a, b) => a + b, 0), 
@@ -779,11 +869,11 @@ function runFFmpegTranscode({ songId, timestamp, tempAudio, tempCover, tempM3u8,
           video: { width: COVER_OUTPUT.width, height: COVER_OUTPUT.height }, 
           timestamp: Date.now() 
         }; 
-        fs.writeFileSync(getSegmentInfoPath(songId), JSON.stringify(info));
+        fs.writeFileSync(getSegmentInfoPath(songCacheKey), JSON.stringify(info));
         
-        songSegmentInfo.set(String(songId), info);
+        songSegmentInfo.set(String(songCacheKey), info);
         
-        if (LOG_VERBOSE) console.log(`[分片缓存] 完成: ${songId}, ${segmentFiles.length}个分片`);
+        if (LOG_VERBOSE) console.log(`[分片缓存] 完成: ${songCacheKey}, ${segmentFiles.length}个分片`);
         resolve(info);
       } catch (e) {
         reject(e);
@@ -792,44 +882,53 @@ function runFFmpegTranscode({ songId, timestamp, tempAudio, tempCover, tempM3u8,
   });
 }
 
-async function autoPreloadInBackground(songs, cookie, coverUrl, playlistId) {
-  const preloadKey = `${playlistId}_${songs[0]?.id}`;
+async function autoPreloadInBackground({ songs, cookie, coverUrl, playlistId, source, mode }) {
+  const adapter = getSourceAdapter(source);
+  const firstSongId = getSongIdForTrack(Array.isArray(songs) ? songs[0] : null, source);
+  const preloadKey = `${source}:${mode}:${playlistId}_${firstSongId}`;
   if (preloadingPlaylists.has(preloadKey)) {
     return;
   }
   preloadingPlaylists.add(preloadKey);
   
-  const toPreload = songs.slice(0, CACHE_CONFIG.autoPreloadCount);
+  const list = Array.isArray(songs) ? songs : [];
+  const toPreload = list.slice(0, CACHE_CONFIG.autoPreloadCount);
   console.log(`[自动预加载] 开始预加载 ${toPreload.length} 首歌`);
   
   for (const song of toPreload) {
-    if (isSongCached(song.id)) {
+    const rawSongId = getSongIdForTrack(song, source);
+    if (!isValidSongIdForSource(rawSongId, source)) {
+      continue;
+    }
+    const songCacheKey = getScopedSongCacheKey(rawSongId, source, mode);
+
+    if (isSongCached(songCacheKey)) {
       continue;
     }
     
-    if (generatingLocks.has(String(song.id))) {
+    if (generatingLocks.has(songCacheKey)) {
       continue;
     }
     
     try {
-      const audioUrl = await netease.getSongUrl(song.id, cookie);
+      const audioUrl = await adapter.getSongUrl(rawSongId, cookie);
       if (!audioUrl) {
-        console.log(`[自动预加载] 跳过 ${song.id}：无法获取URL`);
+        console.log(`[自动预加载] 跳过 ${rawSongId}：无法获取URL`);
         continue;
       }
       
-      const perSongCover = pickCoverUrlForSong(song, coverUrl);
-      const generatePromise = generateSongSegments(song.id, audioUrl, perSongCover, song.duration);
+      const perSongCover = isLiteVideoMode(mode) ? coverUrl : pickCoverUrlForSong(song, coverUrl);
+      const generatePromise = generateSongSegments(songCacheKey, audioUrl, perSongCover, song.duration);
       generatePromise._createdAt = Date.now();
-      generatingLocks.set(String(song.id), generatePromise);
+      generatingLocks.set(songCacheKey, generatePromise);
       
       await generatePromise;
-      generatingLocks.delete(String(song.id));
+      generatingLocks.delete(songCacheKey);
       
       console.log(`[自动预加载] 完成: ${song.name}`);
     } catch (e) {
-      generatingLocks.delete(String(song.id));
-      console.error(`[自动预加载] 失败 ${song.id}:`, e.message);
+      generatingLocks.delete(songCacheKey);
+      console.error(`[自动预加载] 失败 ${rawSongId}:`, e.message);
     }
   }
   
@@ -837,16 +936,18 @@ async function autoPreloadInBackground(songs, cookie, coverUrl, playlistId) {
   console.log(`[自动预加载] 全部完成`);
 }
 
-async function preloadNextSongs(playlistId, currentSongId, cookie) {
+async function preloadNextSongs({ playlistId, currentSongId, cookie, source, mode }) {
+  const adapter = getSourceAdapter(source);
+  const playlistCacheKey = getPlaylistCacheKey(playlistId, source);
   try {
-    const cached = playlistOps.get.get(playlistId);
+    const cached = playlistOps.get.get(playlistCacheKey);
     if (!cached) return;
     
     let songs;
     try {
       songs = JSON.parse(cached.songs);
     } catch (parseErr) {
-      console.error(`[边播边缓存] 歌单缓存损坏 ${playlistId}:`, parseErr.message);
+      console.error(`[边播边缓存] 歌单缓存损坏 ${playlistCacheKey}:`, parseErr.message);
       try { playlistOps.clearExpired.run(); } catch (_) {}
       return;
     }
@@ -854,38 +955,41 @@ async function preloadNextSongs(playlistId, currentSongId, cookie) {
     
     const coverUrl = cached.cover || DEFAULT_COVER_URL;
     
-    const currentIndex = songs.findIndex(s => String(s.id) === String(currentSongId));
+    const currentIndex = songs.findIndex(s => getSongIdForTrack(s, source) === String(currentSongId));
     if (currentIndex === -1) return;
     
     const nextSongs = songs.slice(currentIndex + 1, currentIndex + 3);
     if (nextSongs.length === 0) return;
     
-    const preloadKey = `next_${currentSongId}`;
+    const preloadKey = `next:${source}:${mode}:${currentSongId}`;
     if (preloadingPlaylists.has(preloadKey)) return;
     preloadingPlaylists.add(preloadKey);
     
     if (LOG_VERBOSE) console.log(`[边播边缓存] 预加载接下来 ${nextSongs.length} 首`);
     
     for (const song of nextSongs) {
-      if (isSongCached(song.id) || generatingLocks.has(String(song.id))) {
+      const rawSongId = getSongIdForTrack(song, source);
+      if (!isValidSongIdForSource(rawSongId, source)) continue;
+      const songCacheKey = getScopedSongCacheKey(rawSongId, source, mode);
+      if (isSongCached(songCacheKey) || generatingLocks.has(songCacheKey)) {
         continue;
       }
       
       try {
-        const audioUrl = await netease.getSongUrl(song.id, cookie);
+        const audioUrl = await adapter.getSongUrl(rawSongId, cookie);
         if (!audioUrl) continue;
         
-        const perSongCover = pickCoverUrlForSong(song, coverUrl);
-        const generatePromise = generateSongSegments(song.id, audioUrl, perSongCover, song.duration);
+        const perSongCover = isLiteVideoMode(mode) ? coverUrl : pickCoverUrlForSong(song, coverUrl);
+        const generatePromise = generateSongSegments(songCacheKey, audioUrl, perSongCover, song.duration);
         generatePromise._createdAt = Date.now();
-        generatingLocks.set(String(song.id), generatePromise);
+        generatingLocks.set(songCacheKey, generatePromise);
         
         await generatePromise;
-        generatingLocks.delete(String(song.id));
+        generatingLocks.delete(songCacheKey);
         
         if (LOG_VERBOSE) console.log(`[边播边缓存] 完成: ${song.name}`);
       } catch (e) {
-        generatingLocks.delete(String(song.id));
+        generatingLocks.delete(songCacheKey);
       }
     }
     
@@ -1006,7 +1110,11 @@ function getBaseUrl(req) {
 
 router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
   const { token, playlistId } = req.params;
-  const startIndex = parseInt(req.query.start) || 0;
+  const source = getSourceFromReq(req);
+  const mode = getModeFromReq(req);
+  const adapter = getSourceAdapter(source);
+  const startIndex = parseInt(req.query.start, 10) || 0;
+  const playlistCacheKey = getPlaylistCacheKey(playlistId, source);
   
   if (!isLikelyToken(token)) {
     return res.status(400).send('#EXTM3U\n#EXT-X-ERROR:Invalid token format');
@@ -1015,7 +1123,7 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
     return res.status(400).send('#EXTM3U\n#EXT-X-ERROR:Invalid playlist ID');
   }
   
-  const user = resolveUserFromAccessToken(token, playlistId);
+  const user = resolveUserFromAccessToken(token, playlistId, source);
   if (!user) {
     return res.status(401).send('#EXTM3U\n#EXT-X-ERROR:Invalid token');
   }
@@ -1023,7 +1131,7 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
   const cookie = decrypt(user.cookie);
   
   let songs, playlistCover;
-  const cached = playlistOps.get.get(playlistId);
+  const cached = playlistOps.get.get(playlistCacheKey);
   
   if (cached) {
     let cacheParseOk = true;
@@ -1033,13 +1141,13 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
         throw new Error('songs is not an array');
       }
     } catch (parseErr) {
-      console.error(`[HLS] 歌单缓存损坏 ${playlistId}:`, parseErr.message);
+      console.error(`[HLS] 歌单缓存损坏 ${playlistCacheKey}:`, parseErr.message);
       cacheParseOk = false;
     }
     
     if (!cacheParseOk) {
       try {
-        const playlist = await netease.getPlaylistDetail(playlistId, cookie);
+        const playlist = await adapter.getPlaylistDetail(playlistId, cookie);
         songs = playlist.tracks;
         playlistCover = playlist.cover;
       } catch (refreshErr) {
@@ -1051,7 +1159,7 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
     const hasCover = Array.isArray(songs) && songs.some(s => s && s.cover);
     if (!hasCover) {
       try {
-        const playlist = await netease.getPlaylistDetail(playlistId, cookie);
+        const playlist = await adapter.getPlaylistDetail(playlistId, cookie);
         songs = playlist.tracks;
         playlistCover = playlist.cover;
       } catch (_) {
@@ -1059,7 +1167,7 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
     }
   } else {
     try {
-      const playlist = await netease.getPlaylistDetail(playlistId, cookie);
+      const playlist = await adapter.getPlaylistDetail(playlistId, cookie);
       songs = playlist.tracks;
       playlistCover = playlist.cover;
     } catch (e) {
@@ -1067,13 +1175,15 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
     }
   }
   
-  songs = songs.slice(startIndex);
+  songs = Array.isArray(songs) ? songs.slice(startIndex) : [];
   
   if (songs.length === 0) {
     return res.status(404).send('#EXTM3U\n#EXT-X-ERROR:Empty playlist');
   }
   
   const baseUrl = getBaseUrl(req);
+  const segmentBasePath = getSegmentBasePathForReq(req, token, playlistId);
+  const modeSuffix = isLiteVideoMode(mode) ? '?mode=lite_video' : '';
   const segmentDuration = CACHE_CONFIG.segmentDuration;
   
   let m3u8 = '#EXTM3U\n';
@@ -1085,10 +1195,14 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
   
   for (let songIndex = 0; songIndex < songs.length; songIndex++) {
     const song = songs[songIndex];
-    const songId = song.id;
+    const songId = getSongIdForTrack(song, source);
+    if (!isValidSongIdForSource(songId, source)) {
+      continue;
+    }
+    const songCacheKey = getScopedSongCacheKey(songId, source, mode);
     const songDuration = song.duration || 240;
     
-    let segmentInfo = getSongSegmentInfo(songId);
+    let segmentInfo = getSongSegmentInfo(songCacheKey);
     
     if (segmentInfo && segmentInfo.segmentDurations) {
       if (songIndex > 0) {
@@ -1099,7 +1213,7 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
       for (let segIndex = 0; segIndex < segmentInfo.segmentCount; segIndex++) {
         const segDuration = segmentInfo.segmentDurations[segIndex] || segmentDuration;
         m3u8 += `#EXTINF:${segDuration.toFixed(6)},\n`;
-        m3u8 += `${baseUrl}/api/hls/${encodeURIComponent(token)}/${playlistId}/seg/${songId}/${segIndex}.ts\n`;
+        m3u8 += `${baseUrl}${segmentBasePath}/seg/${encodeURIComponent(songId)}/${segIndex}.ts${modeSuffix}\n`;
       }
     } else {
       if (songIndex > 0) {
@@ -1113,7 +1227,7 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
           ? (songDuration % segmentDuration) || segmentDuration 
           : segmentDuration;
         m3u8 += `#EXTINF:${segDur.toFixed(6)},\n`;
-        m3u8 += `${baseUrl}/api/hls/${encodeURIComponent(token)}/${playlistId}/seg/${songId}/${segIndex}.ts\n`;
+        m3u8 += `${baseUrl}${segmentBasePath}/seg/${encodeURIComponent(songId)}/${segIndex}.ts${modeSuffix}\n`;
       }
     }
   }
@@ -1125,9 +1239,20 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.send(m3u8);
   
-  const coverUrl = playlistCover || DEFAULT_COVER_URL;
+  let coverUrl = playlistCover || DEFAULT_COVER_URL;
+  if (isLiteVideoMode(mode)) {
+    const picked = await getOrBindBg({
+      token,
+      playlistId,
+      source,
+      fallbackUrl: coverUrl
+    });
+    const allowed = isDownloadUrlAllowed(picked);
+    coverUrl = allowed.allowed ? picked : coverUrl;
+  }
+
   setImmediate(() => {
-    autoPreloadInBackground(songs, cookie, coverUrl, playlistId).catch(e => {
+    autoPreloadInBackground({ songs, cookie, coverUrl, playlistId, source, mode }).catch(e => {
       console.error('[自动预加载] 错误:', e.message);
     });
   });
@@ -1135,6 +1260,11 @@ router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
 
 router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) => {
   const { token, playlistId, songId, segmentIndex } = req.params;
+  const source = getSourceFromReq(req);
+  const mode = getModeFromReq(req);
+  const adapter = getSourceAdapter(source);
+  const playlistCacheKey = getPlaylistCacheKey(playlistId, source);
+  const songCacheKey = getScopedSongCacheKey(songId, source, mode);
   const segIndex = parseInt(segmentIndex);
   
   if (!isLikelyToken(token)) {
@@ -1143,14 +1273,14 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
   if (!isValidNumericId(playlistId)) {
     return res.status(400).json({ error: 'Invalid playlist ID' });
   }
-  if (!isValidNumericId(songId)) {
+  if (!isValidSongIdForSource(songId, source)) {
     return res.status(400).json({ error: 'Invalid song ID' });
   }
   if (!isValidSegmentIndex(segmentIndex)) {
     return res.status(400).json({ error: 'Invalid segment index' });
   }
   
-  const user = resolveUserFromAccessToken(token, playlistId);
+  const user = resolveUserFromAccessToken(token, playlistId, source);
   if (!user) {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -1162,11 +1292,11 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
       let songName = '未知';
       let artist = '未知';
 
-      const cached = playlistOps.get.get(playlistId);
+      const cached = playlistOps.get.get(playlistCacheKey);
       if (cached && cached.songs) {
         try {
           const songs = JSON.parse(cached.songs);
-          const song = Array.isArray(songs) ? songs.find(s => String(s?.id) === String(songId)) : null;
+          const song = Array.isArray(songs) ? songs.find(s => getSongIdForTrack(s, source) === String(songId)) : null;
           if (song) {
             if (song.name) songName = String(song.name);
             if (song.artist) artist = String(song.artist);
@@ -1176,8 +1306,8 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
 
       playLogOps.log.run({
         user_id: user.id,
-        playlist_id: String(playlistId),
-        song_id: String(songId),
+        playlist_id: adapter.toPlayLogPlaylistId(playlistId),
+        song_id: adapter.toPlayLogSongId(songId),
         song_name: songName,
         artist
       });
@@ -1190,11 +1320,11 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=86400');
   
-  const segmentPath = getSegmentPath(songId, segIndex); 
+  const segmentPath = getSegmentPath(songCacheKey, segIndex); 
 
   const hitStat = await statIfValidSegment(segmentPath);
   if (hitStat) { 
-    if (LOG_VERBOSE) console.log(`[分片命中] ${songId}/${segIndex}`); 
+    if (LOG_VERBOSE) console.log(`[分片命中] ${songCacheKey}/${segIndex}`); 
 
     const etag = makeWeakEtag(hitStat);
     res.setHeader('ETag', etag);
@@ -1210,14 +1340,14 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
     stream.pipe(res); 
      
     if (segIndex === 0) { 
-      setImmediate(() => preloadNextSongs(playlistId, songId, cookie)); 
+      setImmediate(() => preloadNextSongs({ playlistId, currentSongId: songId, cookie, source, mode })); 
     } 
     return; 
   } 
   
-  const lockKey = String(songId);
+  const lockKey = songCacheKey;
   if (generatingLocks.has(lockKey)) {
-    console.log(`[等待分片生成] ${songId}`);
+    console.log(`[等待分片生成] ${songCacheKey}`);
     try { 
       await generatingLocks.get(lockKey); 
       const generatedStat = await statIfValidSegment(segmentPath);
@@ -1230,7 +1360,7 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
         stream.pipe(res); 
  
         if (segIndex === 0) { 
-          setImmediate(() => preloadNextSongs(playlistId, songId, cookie));
+          setImmediate(() => preloadNextSongs({ playlistId, currentSongId: songId, cookie, source, mode }));
         }
         return;
       }
@@ -1239,26 +1369,42 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
   }
   
   try {
-    const audioUrl = await netease.getSongUrl(songId, cookie);
+    const audioUrl = await adapter.getSongUrl(songId, cookie);
     if (!audioUrl) {
       return res.status(404).json({ error: 'Cannot get song URL' });
     }
     
     let coverUrl = DEFAULT_COVER_URL;
-    const cached = playlistOps.get.get(playlistId);
+    const cached = playlistOps.get.get(playlistCacheKey);
+    let matchedSong = null;
     if (cached) {
       if (cached.cover) coverUrl = cached.cover;
       try {
         const songs = JSON.parse(cached.songs || '[]');
-        const song = Array.isArray(songs) ? songs.find(s => String(s?.id) === String(songId)) : null;
-        if (song && song.cover) coverUrl = song.cover;
+        matchedSong = Array.isArray(songs) ? songs.find(s => getSongIdForTrack(s, source) === String(songId)) : null;
+        if (matchedSong && matchedSong.cover) coverUrl = matchedSong.cover;
       } catch (_) {}
     }
+
+    if (isLiteVideoMode(mode)) {
+      const picked = await getOrBindBg({
+        token,
+        playlistId,
+        source,
+        fallbackUrl: coverUrl
+      });
+      const allowed = isDownloadUrlAllowed(picked);
+      if (allowed.allowed) {
+        coverUrl = picked;
+      }
+    }
     
-    if (LOG_VERBOSE) console.log(`[分片未命中] 生成歌曲所有分片: ${songId}`);
+    if (LOG_VERBOSE) console.log(`[分片未命中] 生成歌曲所有分片: ${songCacheKey}`);
     
-    const perSongCover = pickCoverUrlForSong({ id: songId, cover: coverUrl }, coverUrl);
-    const generatePromise = generateSongSegments(songId, audioUrl, perSongCover);
+    const perSongCover = isLiteVideoMode(mode)
+      ? coverUrl
+      : pickCoverUrlForSong(matchedSong || { id: songId, cover: coverUrl }, coverUrl);
+    const generatePromise = generateSongSegments(songCacheKey, audioUrl, perSongCover);
     generatePromise._createdAt = Date.now();
     generatingLocks.set(lockKey, generatePromise);
     
@@ -1279,7 +1425,7 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
         stream.pipe(res);
 
         if (segIndex === 0) {
-          setImmediate(() => preloadNextSongs(playlistId, songId, cookie));
+          setImmediate(() => preloadNextSongs({ playlistId, currentSongId: songId, cookie, source, mode }));
         }
       } else {
         generatingLocks.delete(lockKey);
@@ -1312,16 +1458,24 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
 
 router.get('/:token/:playlistId/song/:songId.ts', (req, res) => {
   const { token, playlistId, songId } = req.params;
+  const source = getSourceFromReq(req);
+  const mode = getModeFromReq(req);
+  const basePath = source === 'qq' ? '/api/qq/hls' : '/api/hls';
+  const modeSuffix = isLiteVideoMode(mode) ? '?mode=lite_video' : '';
   
-  if (!isLikelyToken(token) || !isValidNumericId(playlistId) || !isValidNumericId(songId)) {
+  if (!isLikelyToken(token) || !isValidNumericId(playlistId) || !isValidSongIdForSource(songId, source)) {
     return res.status(400).json({ error: 'Invalid parameters' });
   }
   
-  res.redirect(`/api/hls/${encodeURIComponent(token)}/${playlistId}/seg/${songId}/0.ts`);
+  res.redirect(`${basePath}/${encodeURIComponent(token)}/${playlistId}/seg/${encodeURIComponent(songId)}/0.ts${modeSuffix}`);
 });
 
 router.post('/:token/:playlistId/preload', async (req, res) => {
   const { token, playlistId } = req.params;
+  const source = getSourceFromReq(req);
+  const mode = getModeFromReq(req);
+  const adapter = getSourceAdapter(source);
+  const playlistCacheKey = getPlaylistCacheKey(playlistId, source);
   const count = Math.min(parseInt(req.body.count) || 5, 20);
   
   if (!isLikelyToken(token)) {
@@ -1331,7 +1485,7 @@ router.post('/:token/:playlistId/preload', async (req, res) => {
     return res.status(400).json({ error: 'Invalid playlist ID' });
   }
   
-  const user = resolveUserFromAccessToken(token, playlistId);
+  const user = resolveUserFromAccessToken(token, playlistId, source);
   if (!user) {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -1340,7 +1494,7 @@ router.post('/:token/:playlistId/preload', async (req, res) => {
   
   try {
     let songs;
-    const cached = playlistOps.get.get(playlistId);
+    const cached = playlistOps.get.get(playlistCacheKey);
     
     if (cached) {
       let cacheParseOk = true;
@@ -1350,53 +1504,71 @@ router.post('/:token/:playlistId/preload', async (req, res) => {
           throw new Error('songs is not an array');
         }
       } catch (parseErr) {
-        console.error(`[预加载] 歌单缓存损坏 ${playlistId}:`, parseErr.message);
+        console.error(`[预加载] 歌单缓存损坏 ${playlistCacheKey}:`, parseErr.message);
         cacheParseOk = false;
       }
       
       if (!cacheParseOk) {
-        const playlist = await netease.getPlaylistDetail(playlistId, cookie);
+        const playlist = await adapter.getPlaylistDetail(playlistId, cookie);
         songs = playlist.tracks;
       } else {
         const hasCover = Array.isArray(songs) && songs.some(s => s && s.cover);
         if (!hasCover) {
           try {
-            const playlist = await netease.getPlaylistDetail(playlistId, cookie);
+            const playlist = await adapter.getPlaylistDetail(playlistId, cookie);
             songs = playlist.tracks;
           } catch (_) {}
         }
       }
     } else {
-      const playlist = await netease.getPlaylistDetail(playlistId, cookie);
+      const playlist = await adapter.getPlaylistDetail(playlistId, cookie);
       songs = playlist.tracks;
     }
     
-    const toPreload = songs.slice(0, count);
+    const toPreload = Array.isArray(songs) ? songs.slice(0, count) : [];
     const results = [];
     
     let coverUrl = (cached && cached.cover) ? cached.cover : DEFAULT_COVER_URL;
+    if (isLiteVideoMode(mode)) {
+      const picked = await getOrBindBg({
+        token,
+        playlistId,
+        source,
+        fallbackUrl: coverUrl
+      });
+      const allowed = isDownloadUrlAllowed(picked);
+      if (allowed.allowed) {
+        coverUrl = picked;
+      }
+    }
     
     if (LOG_VERBOSE) console.log(`[预加载] 开始预加载 ${toPreload.length} 首歌`);
     
     for (const song of toPreload) {
-      if (isSongCached(song.id)) {
-        const info = getSongSegmentInfo(song.id);
-        results.push({ id: song.id, name: song.name, status: 'cached', segments: info?.segmentCount || 0 });
+      const songId = getSongIdForTrack(song, source);
+      if (!isValidSongIdForSource(songId, source)) {
+        results.push({ id: songId, name: song.name, status: 'bad_song_id' });
+        continue;
+      }
+      const songCacheKey = getScopedSongCacheKey(songId, source, mode);
+      if (isSongCached(songCacheKey)) {
+        const info = getSongSegmentInfo(songCacheKey);
+        results.push({ id: songId, name: song.name, status: 'cached', segments: info?.segmentCount || 0 });
         continue;
       }
       
       try {
-        const audioUrl = await netease.getSongUrl(song.id, cookie);
+        const audioUrl = await adapter.getSongUrl(songId, cookie);
         if (!audioUrl) {
-          results.push({ id: song.id, name: song.name, status: 'no_url' });
+          results.push({ id: songId, name: song.name, status: 'no_url' });
           continue;
         }
         
-        const perSongCover = pickCoverUrlForSong(song, coverUrl);
-        const info = await generateSongSegments(song.id, audioUrl, perSongCover, song.duration);
-        results.push({ id: song.id, name: song.name, status: 'generated', segments: info.segmentCount });
+        const perSongCover = isLiteVideoMode(mode) ? coverUrl : pickCoverUrlForSong(song, coverUrl);
+        const info = await generateSongSegments(songCacheKey, audioUrl, perSongCover, song.duration);
+        results.push({ id: songId, name: song.name, status: 'generated', segments: info.segmentCount });
       } catch (e) {
-        results.push({ id: song.id, name: song.name, status: 'error', error: e.message });
+        results.push({ id: songId, name: song.name, status: 'error', error: e.message });
       }
     }
     
@@ -1421,8 +1593,8 @@ router.get('/cache/status', adminAuth, async (req, res) => {
       if (!entry.isDirectory()) continue; 
       totalSongs++; 
 
-      const songId = String(entry.name); 
-      const songDir = path.join(CACHE_DIR, songId); 
+      const songId = fromFsCacheKey(entry.name); 
+      const songDir = path.join(CACHE_DIR, entry.name); 
       const infoPath = path.join(songDir, 'info.json'); 
 
       let segmentCount = 0; 
@@ -1452,7 +1624,7 @@ router.get('/cache/status', adminAuth, async (req, res) => {
       if (cachedSongs.length < 50) { 
         const ageMin = timestamp ? Math.round((Date.now() - timestamp) / 1000 / 60) : 0; 
         cachedSongs.push({ 
-          songId, 
+          songId: info && info.songId ? String(info.songId) : songId, 
           segments: segmentCount, 
           size: (songSize / 1024 / 1024).toFixed(2) + ' MB', 
           age: ageMin + ' minutes' 
@@ -1495,8 +1667,8 @@ router.delete('/cache', adminAuth, async (req, res) => {
       const entry = dirents[i]; 
       if (!entry.isDirectory()) continue; 
 
-      const songId = String(entry.name); 
-      const songDir = path.join(CACHE_DIR, songId); 
+      const songId = fromFsCacheKey(entry.name); 
+      const songDir = path.join(CACHE_DIR, entry.name); 
       try { 
         await fs.promises.rm(songDir, { recursive: true, force: true }); 
         deleted++; 

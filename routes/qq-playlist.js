@@ -266,6 +266,7 @@ router.get('/url', qqAuth, (req, res) => {
 
   const baseUrl = getBaseUrl(req);
   const liteUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite.m3u8`;
+  const liteVideoUrl = `${baseUrl}/api/qq/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8?mode=lite_video`;
 
   res.json({
     success: true,
@@ -277,6 +278,12 @@ router.get('/url', qqAuth, (req, res) => {
           label: '轻量 M3U8（QQ音乐）',
           url: liteUrl,
           note: '大部分 VRChat 播放器可用；但不会显示视频画面（仅音频），兼容性仍取决于播放器实现。'
+        },
+        {
+          type: 'lite_video',
+          label: '视频轻量 M3U8（QQ随机背景图）',
+          url: liteVideoUrl,
+          note: '同一播放链接内固定随机背景图；图片 API 异常会自动回退到歌单封面。'
         }
       ],
       default: 'lite'

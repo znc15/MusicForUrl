@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch-path=./lib --watch-path=./routes --watch-path=./server.js server.js",
-    "check": "node --check server.js && node --check lib/auth.js && node --check lib/crypto.js && node --check lib/db.js && node --check lib/env-check.js && node --check lib/history.js && node --check lib/netease.js && node --check lib/playback-token.js && node --check routes/auth.js && node --check routes/favorite.js && node --check routes/history.js && node --check routes/hls.js && node --check routes/img.js && node --check routes/playlist.js && node --check routes/song.js && echo Syntax check passed",
+    "check": "node --check server.js && node --check lib/auth.js && node --check lib/crypto.js && node --check lib/db.js && node --check lib/env-check.js && node --check lib/history.js && node --check lib/lite-video-bg.js && node --check lib/netease.js && node --check lib/playback-token.js && node --check routes/auth.js && node --check routes/favorite.js && node --check routes/history.js && node --check routes/hls.js && node --check routes/img.js && node --check routes/playlist.js && node --check routes/song.js && echo Syntax check passed",
     "test": "node --test tests/*.test.js"
   },
   "keywords": [

@@ -253,6 +253,7 @@ router.get('/url', auth, (req, res) => {
   const baseUrl = getBaseUrl(req);
   const hlsUrl = `${baseUrl}/api/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
   const liteUrl = `${baseUrl}/api/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite.m3u8`;
+  const liteVideoUrl = `${baseUrl}/api/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8?mode=lite_video`;
 
   res.json({
     success: true,
@@ -264,6 +265,12 @@ router.get('/url', auth, (req, res) => {
           label: '轻量 M3U8（优先推荐）',
           url: liteUrl,
           note: '大部分 VRChat 播放器可用；但不会显示视频画面（仅音频），兼容性仍取决于播放器实现。若遇不播放再切换 HLS。'
+        },
+        {
+          type: 'lite_video',
+          label: '视频轻量 M3U8（随机背景图）',
+          url: liteVideoUrl,
+          note: '同一播放链接内固定随机背景图；图片 API 异常会自动回退到歌单封面。'
         },
         {
           type: 'hls',
