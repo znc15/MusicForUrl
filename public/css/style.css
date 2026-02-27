@@ -908,6 +908,10 @@ footer a:hover {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  max-width: min(92vw, 640px);
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
 }
 
 .toast.show {
