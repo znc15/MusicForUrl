@@ -165,8 +165,8 @@ function pickCoverUrlForSong(song, playlistCoverUrl) {
 }
 
 const JOB_LIMITS = {
-  maxConcurrentJobs: parseInt(process.env.HLS_MAX_CONCURRENT_JOBS) || 2,
-  maxQueueSize: parseInt(process.env.HLS_MAX_QUEUE) || 10,
+  maxConcurrentJobs: parseInt(process.env.HLS_MAX_CONCURRENT_JOBS) || 4,
+  maxQueueSize: parseInt(process.env.HLS_MAX_QUEUE) || 20,
   downloadTimeout: parseInt(process.env.HLS_DOWNLOAD_TIMEOUT) || 60000,
   downloadMaxSize: parseInt(process.env.HLS_DOWNLOAD_MAX_SIZE) || 100 * 1024 * 1024,
   downloadMaxRedirects: 5,
@@ -465,8 +465,11 @@ async function cleanupCache(reason = 'interval') {
     for (let i = 0; i < dirents.length; i++) { 
       const entry = dirents[i]; 
       if (!entry.isDirectory()) continue; 
-      const songId = String(entry.name); 
-      if (generatingLocks.has(songId)) continue; 
+      const songId = String(entry.name);
+      if (generatingLocks.has(songId)) continue;
+
+      // 跳过最近 30 秒内生成的缓存，避免刚生成就被清理的竞态
+      const RECENTLY_GENERATED_GRACE_MS = 30 * 1000;
 
       const songDir = path.join(CACHE_DIR, songId); 
       const infoPath = path.join(songDir, 'info.json'); 
@@ -480,14 +483,17 @@ async function cleanupCache(reason = 'interval') {
         sizeBytes = Number(info.cacheBytes) || 0; 
       } 
 
-      if (!timestamp) { 
-        try { 
-          const stat = await fs.promises.stat(songDir); 
-          timestamp = stat.mtimeMs || 0; 
-        } catch (_) { 
-          continue; 
-        } 
-      } 
+      if (!timestamp) {
+        try {
+          const stat = await fs.promises.stat(songDir);
+          timestamp = stat.mtimeMs || 0;
+        } catch (_) {
+          continue;
+        }
+      }
+
+      // 跳过刚生成的缓存目录，防止 after-generate cleanup 竞态删除
+      if (Date.now() - timestamp < RECENTLY_GENERATED_GRACE_MS) continue;
 
       songInfos.push({ songId, path: songDir, timestamp, sizeBytes }); 
 
@@ -1257,22 +1263,26 @@ router.get('/:token/:playlistId/seg/:songId/:segmentIndex.ts', async (req, res) 
     generatingLocks.set(lockKey, generatePromise);
     
     try {
-      await generatePromise; 
-      generatingLocks.delete(lockKey); 
-       
+      await generatePromise;
+
       const generatedStat = await statIfValidSegment(segmentPath);
-      if (generatedStat) { 
+      if (generatedStat) {
         const etag = makeWeakEtag(generatedStat);
         res.setHeader('ETag', etag);
         res.setHeader('Last-Modified', formatHttpDate(generatedStat.mtimeMs));
-        res.setHeader('Content-Length', generatedStat.size); 
-        const stream = fs.createReadStream(segmentPath); 
-        stream.pipe(res); 
-         
-        if (segIndex === 0) { 
+        res.setHeader('Content-Length', generatedStat.size);
+        const stream = fs.createReadStream(segmentPath);
+
+        // 在 stream 完成或出错后才释放 lock，防止 cleanup 竞态删除正在读取的 segment
+        stream.on('close', () => generatingLocks.delete(lockKey));
+        stream.on('error', () => generatingLocks.delete(lockKey));
+        stream.pipe(res);
+
+        if (segIndex === 0) {
           setImmediate(() => preloadNextSongs(playlistId, songId, cookie));
         }
       } else {
+        generatingLocks.delete(lockKey);
         throw new Error(`Segment ${segIndex} not found after generation`);
       }
     } catch (e) {
