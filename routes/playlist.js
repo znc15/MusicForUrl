@@ -8,7 +8,11 @@ const {
   verifyPlaybackToken,
   isLegacyToken
 } = require('../lib/playback-token');
+const { getOrBindBg } = require('../lib/lite-video-bg');
 const { auth } = require('../lib/auth');
+const DEFAULT_COVER_URL =
+  process.env.DEFAULT_COVER_URL ||
+  'https://p1.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg';
 
 function isValidNumericId(id) {
   return typeof id === 'string' && /^\d+$/.test(id) && id.length <= 20;
@@ -63,7 +67,8 @@ function sanitizeM3uTitle(text) {
     .trim();
 }
 
-function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
+function buildLiteM3u8(baseUrl, token, playlistId, tracks, options = {}) {
+  const backgroundImage = typeof options.backgroundImage === 'string' ? options.backgroundImage.trim() : '';
   const list = Array.isArray(tracks) ? tracks : [];
   const durations = list
     .map(t => Math.floor(Number(t?.duration) || 0))
@@ -77,6 +82,10 @@ function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
   out += `#EXT-X-TARGETDURATION:${target}\n`;
   out += '#EXT-X-MEDIA-SEQUENCE:0\n';
   out += '#EXT-X-PLAYLIST-TYPE:VOD\n';
+  if (backgroundImage) {
+    out += '#EXT-X-MFU-MODE:audio-only-lite-video\n';
+    out += `#EXT-X-MFU-BACKGROUND:${backgroundImage}\n`;
+  }
 
   for (const track of list) {
     const id = track && track.id != null ? String(track.id) : '';
@@ -84,8 +93,9 @@ function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
 
     const duration = Math.max(0, Math.floor(Number(track.duration) || 0));
     const title = sanitizeM3uTitle(`${track.artist ? track.artist + ' - ' : ''}${track.name || id}`);
+    const bgQuery = backgroundImage ? `&bg=${encodeURIComponent(backgroundImage)}` : '';
     const url =
-      `${baseUrl}/api/song/${encodeURIComponent(token)}/${encodeURIComponent(id)}?playlist=${encodeURIComponent(playlistId)}`;
+      `${baseUrl}/api/song/${encodeURIComponent(token)}/${encodeURIComponent(id)}?playlist=${encodeURIComponent(playlistId)}${bgQuery}`;
     out += `#EXTINF:${duration},${title}\n`;
     out += `${url}\n`;
   }
@@ -154,6 +164,46 @@ router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
     res.send(m3u8);
   } catch (e) {
     console.error('生成 lite m3u8 失败:', e);
+    res.status(500).type('text/plain').send('Failed to build m3u8');
+  }
+});
+
+router.get('/m3u8/:token/:playlistId/lite-video.m3u8', async (req, res) => {
+  const token = String(req.params.token || '');
+  const playlistId = String(req.params.playlistId || '');
+
+  if (!isLikelyToken(token)) {
+    return res.status(400).type('text/plain').send('Invalid token');
+  }
+  if (!isValidNumericId(playlistId)) {
+    return res.status(400).type('text/plain').send('Invalid playlist id');
+  }
+
+  const user = resolveUserFromAccessToken(token, playlistId);
+  if (!user) {
+    return res.status(401).type('text/plain').send('Token expired');
+  }
+
+  try {
+    const cookie = decrypt(user.cookie);
+    const { playlist, tracks } = await ensurePlaylistCached(playlistId, cookie);
+    const fallbackCover = String(playlist?.cover || DEFAULT_COVER_URL || '');
+    const backgroundImage = await getOrBindBg({
+      token,
+      playlistId,
+      source: 'netease',
+      fallbackUrl: fallbackCover
+    });
+
+    const baseUrl = getBaseUrl(req);
+    const m3u8 = buildLiteM3u8(baseUrl, token, playlistId, tracks, { backgroundImage });
+
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(m3u8);
+  } catch (e) {
+    console.error('生成 lite-video m3u8 失败:', e);
     res.status(500).type('text/plain').send('Failed to build m3u8');
   }
 });
@@ -238,7 +288,7 @@ router.get('/parse', auth, async (req, res) => {
   }
 });
 
-router.get('/url', auth, (req, res) => {
+router.get('/url', auth, async (req, res) => {
   const playlistId = String(req.query.id || '');
 
   if (!isValidNumericId(playlistId)) {
@@ -253,7 +303,19 @@ router.get('/url', auth, (req, res) => {
   const baseUrl = getBaseUrl(req);
   const hlsUrl = `${baseUrl}/api/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
   const liteUrl = `${baseUrl}/api/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite.m3u8`;
-  const liteVideoUrl = `${baseUrl}/api/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8?mode=lite_video`;
+  const liteVideoUrl = `${baseUrl}/api/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite-video.m3u8`;
+  const cachedPlaylist = playlistOps.get.get(playlistId);
+  const fallbackCover = String(cachedPlaylist?.cover || DEFAULT_COVER_URL || '');
+  let backgroundImage = fallbackCover;
+  try {
+    const picked = await getOrBindBg({
+      token: playbackToken,
+      playlistId,
+      source: 'netease',
+      fallbackUrl: fallbackCover
+    });
+    if (picked) backgroundImage = picked;
+  } catch (_) {}
 
   res.json({
     success: true,
@@ -279,7 +341,8 @@ router.get('/url', auth, (req, res) => {
           note: '会消耗更多 CPU/磁盘；当轻量模式无法播放时再使用。'
         }
       ],
-      default: 'lite'
+      default: 'lite',
+      backgroundImage
     }
   });
 
@@ -305,3 +368,6 @@ router.get('/url', auth, (req, res) => {
 });
 
 module.exports = router;
+module.exports.__testHooks = {
+  buildLiteM3u8
+};

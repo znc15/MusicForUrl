@@ -9,6 +9,10 @@ const {
   verifyPlaybackToken,
   isLegacyToken
 } = require('../lib/playback-token');
+const { getOrBindBg } = require('../lib/lite-video-bg');
+const DEFAULT_COVER_URL =
+  process.env.DEFAULT_COVER_URL ||
+  'https://p1.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg';
 
 function isLikelyToken(token) {
   return typeof token === 'string' && token.length > 0 && token.length <= 1024;
@@ -60,7 +64,8 @@ function sanitizeM3uTitle(text) {
     .trim();
 }
 
-function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
+function buildLiteM3u8(baseUrl, token, playlistId, tracks, options = {}) {
+  const backgroundImage = typeof options.backgroundImage === 'string' ? options.backgroundImage.trim() : '';
   const list = Array.isArray(tracks) ? tracks : [];
   const durations = list
     .map(t => Math.floor(Number(t?.duration) || 0))
@@ -74,6 +79,10 @@ function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
   out += `#EXT-X-TARGETDURATION:${target}\n`;
   out += '#EXT-X-MEDIA-SEQUENCE:0\n';
   out += '#EXT-X-PLAYLIST-TYPE:VOD\n';
+  if (backgroundImage) {
+    out += '#EXT-X-MFU-MODE:audio-only-lite-video\n';
+    out += `#EXT-X-MFU-BACKGROUND:${backgroundImage}\n`;
+  }
 
   for (const track of list) {
     // QQ 音乐使用 mid 作为标识
@@ -82,8 +91,9 @@ function buildLiteM3u8(baseUrl, token, playlistId, tracks) {
 
     const duration = Math.max(0, Math.floor(Number(track.duration) || 0));
     const title = sanitizeM3uTitle(`${track.artist ? track.artist + ' - ' : ''}${track.name || mid}`);
+    const bgQuery = backgroundImage ? `&bg=${encodeURIComponent(backgroundImage)}` : '';
     const url =
-      `${baseUrl}/api/qq/song/${encodeURIComponent(token)}/${encodeURIComponent(mid)}?playlist=${encodeURIComponent(playlistId)}`;
+      `${baseUrl}/api/qq/song/${encodeURIComponent(token)}/${encodeURIComponent(mid)}?playlist=${encodeURIComponent(playlistId)}${bgQuery}`;
     out += `#EXTINF:${duration},${title}\n`;
     out += `${url}\n`;
   }
@@ -159,6 +169,46 @@ router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
     res.send(m3u8);
   } catch (e) {
     console.error('生成QQ音乐 lite m3u8 失败:', e);
+    res.status(500).type('text/plain').send('Failed to build m3u8');
+  }
+});
+
+router.get('/m3u8/:token/:playlistId/lite-video.m3u8', async (req, res) => {
+  const token = String(req.params.token || '');
+  const playlistId = String(req.params.playlistId || '');
+
+  if (!isLikelyToken(token)) {
+    return res.status(400).type('text/plain').send('Invalid token');
+  }
+  if (!/^\d+$/.test(playlistId)) {
+    return res.status(400).type('text/plain').send('Invalid playlist id');
+  }
+
+  const user = resolveQQUserFromAccessToken(token, playlistId);
+  if (!user) {
+    return res.status(401).type('text/plain').send('Token expired');
+  }
+
+  try {
+    const cookie = decrypt(user.cookie);
+    const { playlist, tracks } = await ensureQQPlaylistCached(playlistId, cookie);
+    const fallbackCover = String(playlist?.cover || DEFAULT_COVER_URL || '');
+    const backgroundImage = await getOrBindBg({
+      token,
+      playlistId,
+      source: 'qq',
+      fallbackUrl: fallbackCover
+    });
+
+    const baseUrl = getBaseUrl(req);
+    const m3u8 = buildLiteM3u8(baseUrl, token, playlistId, tracks, { backgroundImage });
+
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(m3u8);
+  } catch (e) {
+    console.error('生成QQ音乐 lite-video m3u8 失败:', e);
     res.status(500).type('text/plain').send('Failed to build m3u8');
   }
 });
@@ -252,7 +302,7 @@ router.get('/parse', qqAuth, async (req, res) => {
 
 // ─── 生成播放链接 ──────────────────────────────────────────
 
-router.get('/url', qqAuth, (req, res) => {
+router.get('/url', qqAuth, async (req, res) => {
   const playlistId = String(req.query.id || '');
 
   if (!/^\d+$/.test(playlistId)) {
@@ -266,7 +316,19 @@ router.get('/url', qqAuth, (req, res) => {
 
   const baseUrl = getBaseUrl(req);
   const liteUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite.m3u8`;
-  const liteVideoUrl = `${baseUrl}/api/qq/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8?mode=lite_video`;
+  const liteVideoUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite-video.m3u8`;
+  const cachedPlaylist = playlistOps.get.get(`qq:${playlistId}`);
+  const fallbackCover = String(cachedPlaylist?.cover || DEFAULT_COVER_URL || '');
+  let backgroundImage = fallbackCover;
+  try {
+    const picked = await getOrBindBg({
+      token: playbackToken,
+      playlistId,
+      source: 'qq',
+      fallbackUrl: fallbackCover
+    });
+    if (picked) backgroundImage = picked;
+  } catch (_) {}
 
   res.json({
     success: true,
@@ -286,9 +348,13 @@ router.get('/url', qqAuth, (req, res) => {
           note: '同一播放链接内固定随机背景图；图片 API 异常会自动回退到歌单封面。'
         }
       ],
-      default: 'lite'
+      default: 'lite',
+      backgroundImage
     }
   });
 });
 
 module.exports = router;
+module.exports.__testHooks = {
+  buildLiteM3u8
+};
