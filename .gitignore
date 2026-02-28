@@ -221,6 +221,9 @@ $RECYCLE.BIN/
 /tmp/
 *.tmp
 *.temp
+.omx/
+.codex/
+.agents/
 
 # Export files
 /data/exports/
