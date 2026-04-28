@@ -35,7 +35,14 @@ if (trustProxy !== undefined && trustProxy !== null && String(trustProxy).trim()
 app.set('trust proxy', proxyValue);
 
 app.use(cors());
-app.use(compression());
+app.use(compression({
+  filter: (req, res) => {
+    const ct = res.getHeader('Content-Type') || '';
+    // M3U8 播放列表不压缩，避免部分播放器（如 VLC）无法解码 gzip 响应
+    if (String(ct).includes('mpegurl')) return false;
+    return compression.filter(req, res);
+  }
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

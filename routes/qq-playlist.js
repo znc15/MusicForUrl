@@ -124,8 +124,13 @@ router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
     return res.status(400).type('text/plain').send('Invalid playlist id');
   }
 
+  const ua = req.headers['user-agent'] || '';
+  const ip = req.ip || req.connection?.remoteAddress || '';
+  console.log(`[M3U8 请求] QQ 歌单=${playlistId} IP=${ip} UA=${ua}`);
+
   const user = resolveQQUserFromAccessToken(token, playlistId);
   if (!user) {
+    console.log(`[M3U8 请求] token 验证失败: ${token.slice(0, 20)}...`);
     return res.status(401).type('text/plain').send('Token expired');
   }
 
@@ -135,6 +140,8 @@ router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
 
     const baseUrl = getBaseUrl(req);
     const m3u8 = buildQQLiteM3u8(baseUrl, token, playlistId, tracks);
+
+    console.log(`[M3U8 响应] 歌单=${playlistId} 曲目数=${tracks.length} 大小=${m3u8.length}字节`);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');

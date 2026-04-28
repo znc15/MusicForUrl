@@ -86,11 +86,13 @@ tramp
 # ============================================================================
 
 # Cursor IDE
+.trellis/
 .cursor/
 .cursorrules
 .cursorignore
 AGENTS.md
 Update.md
+CLAUDE.md
 
 # GitHub Copilot
 .copilot/
@@ -145,6 +147,9 @@ ai_context/
 *.ai.md
 *.ai.txt
 *_ai_generated*
+
+#Claude Code
+.claude/
 
 # ============================================================================
 # Environment & Secrets
