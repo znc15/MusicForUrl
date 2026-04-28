@@ -1300,9 +1300,34 @@ async function generatePlaylist() {
 function copyUrl() {
   const url = getSelectedGeneratedUrl();
   if (!url) return;
-  navigator.clipboard.writeText(url).then(() => {
+
+  // 优先使用 Clipboard API（需要安全上下文：HTTPS 或 localhost）
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    navigator.clipboard.writeText(url).then(() => {
+      showToast('复制成功');
+    }).catch(() => {
+      // Clipboard API 拒绝（如权限不足），回退到 execCommand
+      fallbackCopyText(url);
+    });
+  } else {
+    // 非 HTTPS 环境下 Clipboard API 不可用，使用兼容方案
+    fallbackCopyText(url);
+  }
+}
+
+function fallbackCopyText(text) {
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
     showToast('复制成功');
-  });
+  } catch (e) {
+    showToast('复制失败，请手动复制', 'error');
+  }
 }
 
 function renderPagination(containerId, total, page, pageSize, callbackName) {
