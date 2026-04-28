@@ -247,22 +247,22 @@ router.get('/url', auth, (req, res) => {
   res.json({
     success: true,
     data: {
-      url: liteUrl,
+      url: hlsUrl,
       urls: [
         {
-          type: 'lite',
-          label: '轻量 M3U8（优先推荐）',
-          url: liteUrl,
-          note: '大部分 VRChat 播放器可用；但不会显示视频画面（仅音频），兼容性仍取决于播放器实现。若遇不播放再切换 HLS。'
+          type: 'hls',
+          label: 'HLS 转码（VRChat 推荐）',
+          url: hlsUrl,
+          note: 'VRChat 兼容性最佳，带封面视频。首次播放需等待转码，后续自动缓存。'
         },
         {
-          type: 'hls',
-          label: 'HLS（转码分片，兼容更稳）',
-          url: hlsUrl,
-          note: '会消耗更多 CPU/磁盘；当轻量模式无法播放时再使用。'
+          type: 'lite',
+          label: '轻量 M3U8（仅音频）',
+          url: liteUrl,
+          note: '无需转码，即时播放。VRChat 可能不支持，建议在支持 HLS 直播流的播放器中使用。'
         }
       ],
-      default: 'lite'
+      default: 'hls'
     }
   });
 

@@ -253,21 +253,28 @@ router.get('/url', qqAuth, (req, res) => {
   });
 
   const baseUrl = getBaseUrl(req);
+  const hlsUrl = `${baseUrl}/api/qq/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
   const liteUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
 
   res.json({
     success: true,
     data: {
-      url: liteUrl,
+      url: hlsUrl,
       urls: [
         {
+          type: 'hls',
+          label: 'HLS 转码（VRChat 推荐）',
+          url: hlsUrl,
+          note: 'VRChat 兼容性最佳，带封面视频。首次播放需等待转码，后续自动缓存。'
+        },
+        {
           type: 'lite',
-          label: '轻量 M3U8（QQ音乐）',
+          label: '轻量 M3U8（仅音频）',
           url: liteUrl,
-          note: '大部分 VRChat 播放器可用；但不会显示视频画面（仅音频），兼容性仍取决于播放器实现。'
+          note: '无需转码，即时播放。VRChat 可能不支持，建议在支持 HLS 直播流的播放器中使用。'
         }
       ],
-      default: 'lite'
+      default: 'hls'
     }
   });
 });
