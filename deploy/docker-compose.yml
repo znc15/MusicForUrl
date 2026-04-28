@@ -21,9 +21,23 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      # 生产环境必填：Cookie 加密密钥（至少16位，建议32位字符串；纯数字务必加引号）
+      # ── 生产环境必填 ──
+      # Cookie 加密密钥（至少16位，建议32位字符串；纯数字务必加引号）
       ENCRYPTION_KEY: "your-32-character-secret-key-here"
+      # ── 可选配置 ──
       CACHE_TTL: 86400
+      # 登录 token 有效期（小时，默认 168=7天）
+      # TOKEN_TTL_HOURS: 168
+      # 播放链接签名 token 有效期（秒，默认 172800=48小时）
+      # PLAYBACK_TOKEN_TTL_SECONDS: 172800
+      # 音质：low(128k) / medium(192k) / high(320k) / lossless
+      # MUSIC_QUALITY: low
+      # 站点访问密码（留空则不启用）
+      # SITE_PASSWORD:
+      # 信任代理层数（反向代理后面时设置，例如 1 或 2）
+      # TRUST_PROXY: 1
+      # 公网访问地址（反向代理无法正确获取 host 时设置）
+      # BASE_URL: https://music.example.com
     restart: unless-stopped
 
 volumes:

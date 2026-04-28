@@ -27,3 +27,22 @@ Thumbs.db
 *.tar.gz
 *.tgz
 
+# Trellis / Claude Code
+.trellis
+.claude
+.agents
+
+# Test files
+tests
+
+# Deploy configs (不需要进入镜像)
+deploy
+docker-compose*.yml
+
+# Documentation
+*.md
+!node_modules/**/*.md
+
+# Misc
+.env.example
+.gitattributes
