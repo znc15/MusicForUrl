@@ -52,6 +52,10 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup \
   && mkdir -p /app/data \
   && chown -R appuser:appgroup /app/data
 
+# 预建 .env（Docker 环境变量通过 compose environment 传入，.env 仅作回退）
+RUN if [ -f env.example ]; then cp env.example .env; fi \
+  && chown appuser:appgroup .env 2>/dev/null || true
+
 USER appuser
 
 EXPOSE 3000
