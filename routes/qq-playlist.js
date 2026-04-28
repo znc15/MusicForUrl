@@ -113,7 +113,7 @@ async function ensureQQPlaylistCached(playlistId, cookie) {
 
 // ─── Lite M3U8 ────────────────────────────────────────────
 
-router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
+router.get('/m3u8/:token/:playlistId/stream.m3u8', async (req, res) => {
   const token = String(req.params.token || '');
   const playlistId = String(req.params.playlistId || '');
 
@@ -253,7 +253,7 @@ router.get('/url', qqAuth, (req, res) => {
   });
 
   const baseUrl = getBaseUrl(req);
-  const liteUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite.m3u8`;
+  const liteUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
 
   res.json({
     success: true,

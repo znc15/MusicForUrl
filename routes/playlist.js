@@ -108,7 +108,7 @@ async function ensurePlaylistCached(playlistId, cookie) {
   return { playlist: { playlist_id: String(playlistId), name: playlist.name, cover: playlist.cover }, tracks: playlist.tracks || [] };
 }
 
-router.get('/m3u8/:token/:playlistId/lite.m3u8', async (req, res) => {
+router.get('/m3u8/:token/:playlistId/stream.m3u8', async (req, res) => {
   const token = String(req.params.token || '');
   const playlistId = String(req.params.playlistId || '');
 
@@ -242,7 +242,7 @@ router.get('/url', auth, (req, res) => {
 
   const baseUrl = getBaseUrl(req);
   const hlsUrl = `${baseUrl}/api/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
-  const liteUrl = `${baseUrl}/api/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/lite.m3u8`;
+  const liteUrl = `${baseUrl}/api/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
 
   res.json({
     success: true,
