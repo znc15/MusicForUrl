@@ -26,22 +26,134 @@ npm start
 
 ### Docker 部署
 
+#### 前置条件
+
+- [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)（Docker Desktop 已包含）
+- 系统需安装 FFmpeg（Docker 镜像内已包含，无需额外安装）
+
+#### 1. 准备配置
+
+复制 compose 文件并修改加密密钥：
+
+```bash
+# 编辑 docker-compose.yml，将 ENCRYPTION_KEY 改为你自己的密钥（至少 16 位，建议 32 位）
+# 纯数字务必加引号，例如 "1234567890123456"
+vim deploy/docker-compose.yml
+```
+
+#### 2. 构建并启动
+
+**基础部署**（适用于大多数 VPS）：
+
 ```bash
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-按机器规格选择（需要资源限制生效时加 `--compatibility`）：
+**按机器规格选择**（需要资源限制生效时加 `--compatibility`）：
+
+| 规格 | 适用场景 | 命令 |
+|---|---|---|
+| 1C1G | 最低配置 VPS、个人使用 | `docker compose -f deploy/docker-compose.1c1g.yml --compatibility up -d --build` |
+| 2C4G | 轻度多人使用 | `docker compose -f deploy/docker-compose.2c4g.yml --compatibility up -d --build` |
+| 4C4G | 多人使用、频繁转码 | `docker compose -f deploy/docker-compose.4c4g.yml --compatibility up -d --build` |
+| 8C8G | 高并发、大量用户 | `docker compose -f deploy/docker-compose.8c8g.yml --compatibility up -d --build` |
+
+> 各规格的详细参数差异见下方 [规格对照表](#docker-规格对照表)。
+
+#### 3. 国内网络加速构建
+
+如果构建时下载依赖慢，可使用国内镜像：
 
 ```bash
-docker compose -f deploy/docker-compose.1c1g.yml --compatibility up -d --build
-docker compose -f deploy/docker-compose.2c4g.yml --compatibility up -d --build
-docker compose -f deploy/docker-compose.4c4g.yml --compatibility up -d --build
-docker compose -f deploy/docker-compose.8c8g.yml --compatibility up -d --build
+docker compose -f deploy/docker-compose.yml build \
+  --build-arg ALPINE_REPO_MIRROR=mirrors.aliyun.com/alpine \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 ```
 
-说明：
-- 以上 compose 默认使用 **named volume** 存储数据；Linux 如需落盘宿主机，可改为 `../data:/app/data`。
-- 端口以 compose 里的 `ports` 为准（默认 `3000:3000`）。
+或通过环境变量传入：
+
+```bash
+ALPINE_REPO_MIRROR=mirrors.aliyun.com/alpine \
+NPM_REGISTRY=https://registry.npmmirror.com \
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+#### 4. 数据持久化
+
+默认使用 Docker named volume，数据在容器重建后不会丢失：
+
+```bash
+# 查看 volume 位置
+docker volume ls | grep music
+```
+
+**Linux 如需落盘到宿主机目录**，编辑 compose 文件，将 volumes 改为：
+
+```yaml
+volumes:
+  - ../data:/app/data
+```
+
+#### 5. 常用管理命令
+
+```bash
+# 查看日志
+docker compose -f deploy/docker-compose.yml logs -f
+
+# 重启服务
+docker compose -f deploy/docker-compose.yml restart
+
+# 停止服务
+docker compose -f deploy/docker-compose.yml down
+
+# 停止并删除数据（谨慎）
+docker compose -f deploy/docker-compose.yml down -v
+
+# 重新构建（代码更新后）
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+#### 6. 反向代理配置
+
+以 Nginx 为例：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name music.example.com;
+
+    # SSL 配置省略...
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+对应 compose 环境变量需添加：
+
+```yaml
+environment:
+  TRUST_PROXY: 1          # 单层反向代理
+  BASE_URL: https://music.example.com
+```
+
+#### Docker 规格对照表
+
+| 参数 | 1C1G | 2C4G | 4C4G | 8C8G |
+|---|---|---|---|---|
+| Node 堆内存 | 256MB | 512MB | 1024MB | 2048MB |
+| FFmpeg 并发任务 | 1 | 1 | 2 | 4 |
+| FFmpeg 线程数 | 1 | 1 | 1 | 2 |
+| 等待队列 | 3 | 5 | 10 | 20 |
+| 封面分辨率 | 854x480 | 1280x720 | 1280x720 | 1920x1080 |
+| 封面帧率 | 1 | 2 | 5 | 10 |
+| 缓存容量 | 1GB | 2GB | 8GB | 20GB |
+| 预加载 | 关闭 | 关闭 | 1 首 | 2 首 |
 
 ## 配置
 
