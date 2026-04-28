@@ -71,7 +71,7 @@ function buildNeteaseLiteM3u8(baseUrl, token, playlistId, tracks) {
     const duration = normalizeDurationSeconds(track.duration);
     const title = sanitizeM3uTitle(`${track.artist ? track.artist + ' - ' : ''}${track.name || id}`);
     const url =
-      `${baseUrl}/api/song/${encodeURIComponent(token)}/${encodeURIComponent(id)}?playlist=${encodeURIComponent(playlistId)}`;
+      `${baseUrl}/api/song/${encodeURIComponent(token)}/${encodeURIComponent(id)}.mp3?playlist=${encodeURIComponent(playlistId)}`;
     segments.push({ duration, title, url });
   }
   return buildLiteM3u8({ segments });

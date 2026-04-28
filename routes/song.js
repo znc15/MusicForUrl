@@ -47,8 +47,14 @@ function evictOldestUrlCache() {
   }
 }
 
-router.get('/:token/:songId', async (req, res) => {
-  const { token, songId } = req.params;
+// FFmpeg/VLC 的 HLS 解析器会检查 segment URL 扩展名，
+// 不在允许列表中的会被拒绝。同时注册带 .mp3 后缀和无后缀两种路由。
+router.get('/:token/:songId.mp3', handleSongRequest);
+router.get('/:token/:songId', handleSongRequest);
+
+async function handleSongRequest(req, res) {
+  const token = req.params.token;
+  const songId = req.params.songId;
   const { playlist } = req.query;
   
   if (!isLikelyToken(token)) {
@@ -99,7 +105,7 @@ router.get('/:token/:songId', async (req, res) => {
     console.error('获取歌曲URL失败:', e);
     res.status(500).json({ error: '获取歌曲失败' });
   }
-});
+}
 
 async function logPlay(userId, songId, playlistId) {
   try {
