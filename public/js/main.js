@@ -50,6 +50,7 @@ let lastAutoPlayId = null;
 let lastGeneratedUrl = '';
 let lastGeneratedUrls = [];
 let selectedGeneratedUrlType = 'hls';
+const MFU_ERROR = (typeof window !== 'undefined' && window.MfuError) ? window.MfuError : null;
 
 function hasSpaContainer() {
   return !!document.getElementById(SPA_VIEW_CONTAINER_ID);
@@ -117,9 +118,36 @@ function navigate(path, { replace = false } = {}) {
 async function fetchViewHtml(view) {
   if (SPA_VIEW_CACHE.has(view)) return SPA_VIEW_CACHE.get(view);
 
-  const res = await fetch(`/views/${view}.html`, { cache: 'no-cache' });
-  if (!res.ok) throw new Error('加载页面失败');
-  const html = await res.text();
+  const requestPath = `/views/${view}.html`;
+  let res;
+  try {
+    res = await fetch(requestPath, { cache: 'no-cache' });
+  } catch (error) {
+    throw normalizeRuntimeError('SPA_VIEW_FETCH', error, requestPath);
+  }
+
+  if (!res.ok) {
+    if (MFU_ERROR && typeof MFU_ERROR.normalizeHttpError === 'function') {
+      throw MFU_ERROR.normalizeHttpError({
+        scope: 'SPA_VIEW_FETCH',
+        status: res.status,
+        payload: null,
+        requestPath
+      });
+    }
+    throw new Error('页面加载失败，请刷新重试');
+  }
+
+  let html;
+  try {
+    html = await res.text();
+  } catch (error) {
+    const parseError = Object.assign(new Error(error && error.message ? error.message : 'view html parse error'), {
+      __mfuType: 'PARSE',
+      __mfuStatus: res.status
+    });
+    throw normalizeRuntimeError('SPA_VIEW_FETCH', parseError, requestPath);
+  }
   SPA_VIEW_CACHE.set(view, html);
   return html;
 }
@@ -144,8 +172,14 @@ async function renderView(view) {
     animateViewEnter(container);
     onViewMounted(view);
   } catch (e) {
-    console.error(e);
-    container.innerHTML = `<div class="empty">页面加载失败，请刷新重试</div>`;
+    logError({
+      channel: 'spa',
+      scope: 'SPA_VIEW_FETCH',
+      requestPath: `/views/${view}.html`,
+      errorCode: e && e.errorCode,
+      meta: e && e._errorMeta ? e._errorMeta : e
+    });
+    container.innerHTML = `<div class="empty">${escapeHtml(toErrorDisplay(e, '页面加载失败，请刷新重试'))}</div>`;
     animateViewEnter(container);
   }
 }
@@ -396,6 +430,7 @@ function initSpa() {
 
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  installGlobalUiErrorHandlers();
   loadIncludes();
   initSpa();
 });
@@ -412,9 +447,24 @@ async function loadIncludes() {
         initTheme();
         if (token) checkLoginStatus();
         if (qqToken) checkQQLoginStatus();
+      } else {
+        logError({
+          channel: 'include',
+          requestPath: '/includes/header.html',
+          errorCode: MFU_ERROR && typeof MFU_ERROR.buildErrorCode === 'function'
+            ? MFU_ERROR.buildErrorCode('HTTP', 'INCLUDE_HEADER', res.status)
+            : `E-HTTP-INCLUDE_HEADER-${res.status}`,
+          meta: { status: res.status }
+        });
       }
     } catch (e) {
-      console.error('Failed to load header', e);
+      const normalized = normalizeRuntimeError('INCLUDE_HEADER', e, '/includes/header.html');
+      logError({
+        channel: 'include',
+        requestPath: '/includes/header.html',
+        errorCode: normalized.errorCode,
+        meta: normalized._errorMeta
+      });
     }
   }
 
@@ -423,9 +473,24 @@ async function loadIncludes() {
       const res = await fetch('/includes/footer.html');
       if (res.ok) {
         footerPlaceholder.outerHTML = await res.text();
+      } else {
+        logError({
+          channel: 'include',
+          requestPath: '/includes/footer.html',
+          errorCode: MFU_ERROR && typeof MFU_ERROR.buildErrorCode === 'function'
+            ? MFU_ERROR.buildErrorCode('HTTP', 'INCLUDE_FOOTER', res.status)
+            : `E-HTTP-INCLUDE_FOOTER-${res.status}`,
+          meta: { status: res.status }
+        });
       }
     } catch (e) {
-      console.error('Failed to load footer', e);
+      const normalized = normalizeRuntimeError('INCLUDE_FOOTER', e, '/includes/footer.html');
+      logError({
+        channel: 'include',
+        requestPath: '/includes/footer.html',
+        errorCode: normalized.errorCode,
+        meta: normalized._errorMeta
+      });
     }
   }
 }
@@ -601,25 +666,172 @@ function showToast(message, type = 'success') {
   setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
-async function api(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['X-Token'] = token;
-  
-  const res = await fetch('/api' + path, {
-    ...options,
-    headers: { ...headers, ...options.headers }
-  });
-  return res.json();
+function normalizeScope(scope) {
+  const value = String(scope || '').trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_');
+  return value || 'UNKNOWN';
 }
 
-async function qqApi(path, options = {}) {
+function normalizeRuntimeError(scope, error, requestPath) {
+  if (error && typeof error === 'object' && error.success === false && error.errorCode) {
+    return error;
+  }
+
+  const normalizedScope = normalizeScope(scope);
+  if (MFU_ERROR && typeof MFU_ERROR.normalizeCaughtError === 'function') {
+    return MFU_ERROR.normalizeCaughtError({
+      scope: normalizedScope,
+      error,
+      requestPath: requestPath || ''
+    });
+  }
+
+  return {
+    success: false,
+    message: (error && error.message) ? String(error.message) : '请求失败，请稍后重试',
+    errorCode: `E-FE-${normalizedScope}-UNKNOWN`,
+    _errorMeta: {
+      kind: 'FE',
+      scope: normalizedScope,
+      status: null,
+      requestPath: requestPath || '',
+      rawMessage: (error && error.message) ? String(error.message) : ''
+    }
+  };
+}
+
+function toErrorDisplay(errorLike, fallbackMessage) {
+  if (MFU_ERROR && typeof MFU_ERROR.toDisplayMessage === 'function') {
+    return MFU_ERROR.toDisplayMessage(errorLike, fallbackMessage);
+  }
+  return String((errorLike && errorLike.message) || fallbackMessage || '请求失败，请稍后重试');
+}
+
+function logError(meta) {
+  if (MFU_ERROR && typeof MFU_ERROR.logDebug === 'function') {
+    MFU_ERROR.logDebug(meta);
+    return;
+  }
+  console.error('[MFU_ERROR]', meta);
+}
+
+function showActionError(errorLike, fallbackMessage) {
+  showToast(toErrorDisplay(errorLike, fallbackMessage), 'error');
+}
+
+function renderInlineError(container, errorLike, fallbackMessage) {
+  if (!container) return;
+  container.innerHTML = `<div class="empty">${escapeHtml(toErrorDisplay(errorLike, fallbackMessage))}</div>`;
+}
+
+async function requestJson(basePath, path, options = {}, scope = 'UNKNOWN', tokenHeader = '', tokenValue = '') {
+  const normalizedScope = normalizeScope(scope);
   const headers = { 'Content-Type': 'application/json' };
-  if (qqToken) headers['X-QQ-Token'] = qqToken;
-  const res = await fetch('/api/qq' + path, {
-    ...options,
-    headers: { ...headers, ...options.headers }
+  if (tokenHeader && tokenValue) headers[tokenHeader] = tokenValue;
+
+  const requestPath = `${basePath}${path}`;
+  const method = String((options && options.method) || 'GET').toUpperCase();
+  let res;
+
+  try {
+    res = await fetch(requestPath, {
+      ...options,
+      headers: { ...headers, ...(options && options.headers ? options.headers : {}) }
+    });
+  } catch (error) {
+    const normalized = normalizeRuntimeError(normalizedScope, error, requestPath);
+    logError({
+      channel: 'request',
+      method,
+      requestPath,
+      errorCode: normalized.errorCode,
+      meta: normalized._errorMeta
+    });
+    return normalized;
+  }
+
+  let payload;
+  try {
+    payload = await res.json();
+  } catch (error) {
+    const parseError = Object.assign(new Error(error && error.message ? error.message : 'response parse error'), {
+      __mfuType: 'PARSE',
+      __mfuStatus: res.status
+    });
+    const normalized = normalizeRuntimeError(normalizedScope, parseError, requestPath);
+    logError({
+      channel: 'request',
+      method,
+      requestPath,
+      errorCode: normalized.errorCode,
+      meta: normalized._errorMeta
+    });
+    return normalized;
+  }
+
+  if (!res.ok || (payload && typeof payload === 'object' && payload.success === false)) {
+    const normalized = (MFU_ERROR && typeof MFU_ERROR.normalizeHttpError === 'function')
+      ? MFU_ERROR.normalizeHttpError({
+        scope: normalizedScope,
+        status: res.status,
+        payload,
+        requestPath
+      })
+      : {
+        success: false,
+        message: (payload && payload.message) ? payload.message : '请求失败，请稍后重试',
+        errorCode: `E-HTTP-${normalizedScope}-${res.status || 'UNKNOWN'}`,
+        _errorMeta: {
+          kind: 'HTTP',
+          scope: normalizedScope,
+          status: res.status || null,
+          requestPath,
+          rawMessage: (payload && payload.message) ? payload.message : ''
+        }
+      };
+
+    logError({
+      channel: 'request',
+      method,
+      requestPath,
+      errorCode: normalized.errorCode,
+      meta: normalized._errorMeta
+    });
+    return normalized;
+  }
+
+  if (payload && typeof payload === 'object') return payload;
+
+  const parseError = Object.assign(new Error('响应结构异常'), {
+    __mfuType: 'PARSE',
+    __mfuStatus: res.status
   });
-  return res.json();
+  const normalized = normalizeRuntimeError(normalizedScope, parseError, requestPath);
+  logError({
+    channel: 'request',
+    method,
+    requestPath,
+    errorCode: normalized.errorCode,
+    meta: normalized._errorMeta
+  });
+  return normalized;
+}
+
+async function api(path, options = {}, scope = 'UNKNOWN') {
+  return requestJson('/api', path, options, scope, 'X-Token', token);
+}
+
+async function qqApi(path, options = {}, scope = 'UNKNOWN') {
+  return requestJson('/api/qq', path, options, scope, 'X-QQ-Token', qqToken);
+}
+
+function installGlobalUiErrorHandlers() {
+  if (!MFU_ERROR || typeof MFU_ERROR.installGlobalErrorHandlers !== 'function') return;
+  MFU_ERROR.installGlobalErrorHandlers({
+    cooldownMs: 5000,
+    onError: (errorLike) => {
+      showActionError(errorLike, '页面出现未处理异常，请刷新重试');
+    }
+  });
 }
 
 function switchPlatform(platform) {
@@ -661,12 +873,14 @@ function restorePlatformTab() {
 }
 
 async function checkLoginStatus() {
-  const res = await api('/auth/status');
+  const res = await api('/auth/status', {}, 'AUTH_STATUS');
   if (res.success && res.data.logged) {
     currentUser = res.data.user;
     updateUserUI();
     refreshPersonalCenterIfActive();
-  } else {
+  } else if (res.success && !res.data.logged) {
+    logout(false);
+  } else if (res && res._errorMeta && res._errorMeta.status === 401) {
     logout(false);
   }
 }
@@ -689,7 +903,7 @@ function updateUserUI() {
 
 function logout(notify = true) {
   if (token) {
-    api('/auth/logout', { method: 'POST' });
+    api('/auth/logout', { method: 'POST' }, 'AUTH_LOGOUT');
   }
   token = '';
   currentUser = null;
@@ -778,9 +992,9 @@ async function loadQRCode() {
   img.src = '/placeholder.svg';
   status.textContent = '加载中...';
   
-  const res = await api('/auth/qrcode');
+  const res = await api('/auth/qrcode', {}, 'AUTH_QRCODE');
   if (!res.success) {
-    status.textContent = '获取失败，请重试';
+    status.textContent = toErrorDisplay(res, '获取二维码失败，请重试');
     return;
   }
   
@@ -794,8 +1008,15 @@ async function loadQRCode() {
 
 async function checkQRCode() {
   if (!qrKey) return;
-  const res = await api('/auth/qrcode/check?key=' + qrKey);
+  const res = await api('/auth/qrcode/check?key=' + qrKey, {}, 'AUTH_QRCODE_CHECK');
   const status = document.getElementById('qrStatus');
+
+  if (!res.success) {
+    if (status) status.textContent = toErrorDisplay(res, '二维码状态检查失败，正在重试…');
+    clearInterval(qrCheckInterval);
+    setTimeout(loadQRCode, 1000);
+    return;
+  }
   
   if (res.code === 800) {
     if (status) status.textContent = '二维码过期，请刷新';
@@ -831,7 +1052,7 @@ async function sendCaptcha() {
   const res = await api('/auth/captcha/send', {
     method: 'POST',
     body: JSON.stringify({ phone })
-  });
+  }, 'AUTH_CAPTCHA_SEND');
   
   if (res.success) {
     showToast('验证码已发送');
@@ -846,7 +1067,7 @@ async function sendCaptcha() {
       }
     }, 1000);
   } else {
-    showToast(res.message || '发送失败', 'error');
+    showActionError(res, '发送验证码失败');
     btn.disabled = false;
   }
 }
@@ -859,7 +1080,7 @@ async function loginWithCaptcha() {
   const res = await api('/auth/login/captcha', {
     method: 'POST',
     body: JSON.stringify({ phone, captcha })
-  });
+  }, 'AUTH_LOGIN_CAPTCHA');
   
   if (res.success) {
     token = res.data.token;
@@ -871,7 +1092,7 @@ async function loginWithCaptcha() {
     refreshPersonalCenterIfActive();
     showToast('登录成功');
   } else {
-    showToast(res.message || '登录失败', 'error');
+    showActionError(res, '验证码登录失败');
   }
 }
 
@@ -883,7 +1104,7 @@ async function loginWithPassword() {
   const res = await api('/auth/login/password', {
     method: 'POST',
     body: JSON.stringify({ phone, password })
-  });
+  }, 'AUTH_LOGIN_PASSWORD');
   
   if (res.success) {
     token = res.data.token;
@@ -895,7 +1116,7 @@ async function loginWithPassword() {
     refreshPersonalCenterIfActive();
     showToast('登录成功');
   } else {
-    showToast(res.message || '登录失败', 'error');
+    showActionError(res, '密码登录失败');
   }
 }
 
@@ -906,7 +1127,7 @@ async function loginWithCookie() {
   const res = await api('/auth/login/cookie', {
     method: 'POST',
     body: JSON.stringify({ cookie })
-  });
+  }, 'AUTH_LOGIN_COOKIE');
   
   if (res.success) {
     token = res.data.token;
@@ -918,7 +1139,7 @@ async function loginWithCookie() {
     refreshPersonalCenterIfActive();
     showToast('登录成功');
   } else {
-    showToast(res.message || 'Cookie无效', 'error');
+    showActionError(res, 'Cookie登录失败');
   }
 }
 
@@ -930,9 +1151,9 @@ async function loadQQQRCode() {
   img.src = '/placeholder.svg';
   status.textContent = '加载中...';
 
-  const res = await qqApi('/auth/qrcode');
+  const res = await qqApi('/auth/qrcode', {}, 'QQ_AUTH_QRCODE');
   if (!res.success) {
-    status.textContent = '获取失败，请重试';
+    status.textContent = toErrorDisplay(res, '获取QQ二维码失败，请重试');
     return;
   }
 
@@ -946,23 +1167,14 @@ async function loadQQQRCode() {
 
 async function checkQQQRCode() {
   if (!qqQrKey) return;
-  let res;
-  try {
-    res = await qqApi('/auth/qrcode/check?key=' + qqQrKey);
-  } catch (e) {
-    console.error('QQ扫码轮询请求失败:', e);
-    return;
-  }
+  const res = await qqApi('/auth/qrcode/check?key=' + qqQrKey, {}, 'QQ_AUTH_QRCODE_CHECK');
   const status = document.getElementById('qqQrStatus');
 
   if (res.success === false) {
-    const message = res.message || (res.code === 804
+    const message = toErrorDisplay(res, res.code === 804
       ? '登录成功但会话初始化失败，请重试扫码'
       : '二维码已失效');
     if (status) status.textContent = message.includes('刷新') ? message : `${message}，正在刷新…`;
-    if (res.code === 804) {
-      showToast(message, 'error');
-    }
     clearInterval(qqQrCheckInterval);
     setTimeout(loadQQQRCode, 1000);
   } else if (res.code === 800) {
@@ -974,9 +1186,8 @@ async function checkQQQRCode() {
   } else if (res.code === 802) {
     if (status) status.textContent = '扫码成功，请确认';
   } else if (res.code === 804) {
-    const message = res.message || '登录成功但会话初始化失败，请重试扫码';
+    const message = toErrorDisplay(res, '登录成功但会话初始化失败，请重试扫码');
     if (status) status.textContent = `${message}，正在刷新…`;
-    showToast(message, 'error');
     clearInterval(qqQrCheckInterval);
     setTimeout(loadQQQRCode, 1000);
   } else if (res.code === 803) {
@@ -996,19 +1207,21 @@ async function checkQQQRCode() {
 }
 
 async function checkQQLoginStatus() {
-  const res = await qqApi('/auth/status');
+  const res = await qqApi('/auth/status', {}, 'QQ_AUTH_STATUS');
   if (res.success && res.data.logged) {
     qqCurrentUser = res.data.user;
     updateUserUI();
     refreshPersonalCenterIfActive();
-  } else {
+  } else if (res.success && !res.data.logged) {
+    logoutQQ(false);
+  } else if (res && res._errorMeta && res._errorMeta.status === 401) {
     logoutQQ(false);
   }
 }
 
 function logoutQQ(notify = true) {
   if (qqToken) {
-    qqApi('/auth/logout', { method: 'POST' });
+    qqApi('/auth/logout', { method: 'POST' }, 'QQ_AUTH_LOGOUT');
   }
   qqToken = '';
   qqCurrentUser = null;
@@ -1043,15 +1256,24 @@ async function generatePlaylist() {
   btn.disabled = true;
 
   try {
-    const callApi = currentPlatform === 'qq' ? qqApi : api;
-    const parseRes = await callApi('/playlist/parse?url=' + encodeURIComponent(input));
-    if (!parseRes.success) throw new Error(parseRes.message);
+    const isQQ = currentPlatform === 'qq';
+    const callApi = isQQ ? qqApi : api;
+    const parseScope = isQQ ? 'QQ_PLAYLIST_PARSE' : 'PLAYLIST_PARSE';
+    const urlScope = isQQ ? 'QQ_PLAYLIST_URL' : 'PLAYLIST_URL';
+    const parseRes = await callApi('/playlist/parse?url=' + encodeURIComponent(input), {}, parseScope);
+    if (!parseRes.success) {
+      showActionError(parseRes, '解析歌单失败');
+      return;
+    }
 
     currentPlaylist = parseRes.data;
     currentPlaylist._platform = currentPlatform;
 
-    const urlRes = await callApi('/playlist/url?id=' + currentPlaylist.id);
-    if (!urlRes.success) throw new Error(urlRes.message);
+    const urlRes = await callApi('/playlist/url?id=' + currentPlaylist.id, {}, urlScope);
+    if (!urlRes.success) {
+      showActionError(urlRes, '生成链接失败');
+      return;
+    }
     
     document.getElementById('playlistCover').src = imageSrc(currentPlaylist.cover);
     document.getElementById('playlistName').textContent = currentPlaylist.name;
@@ -1068,7 +1290,7 @@ async function generatePlaylist() {
     updateFavoriteBtn();
     
   } catch (e) {
-    showToast(e.message || '获取失败', 'error');
+    showActionError(normalizeRuntimeError('PLAYLIST_GENERATE', e, '/ui/generatePlaylist'), '获取歌单失败');
   } finally {
     btn.innerHTML = originalText;
     btn.disabled = false;
@@ -1124,11 +1346,11 @@ async function loadUserPlaylists(page = 1) {
   document.getElementById('playlistsPagination').innerHTML = '';
   
   const offset = (page - 1) * PAGE_SIZE;
-  const res = await api(`/playlist/user?offset=${offset}&limit=${PAGE_SIZE}`);
+  const res = await api(`/playlist/user?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'PLAYLIST_USER');
   isLoadingPlaylists = false;
   
   if (!res.success) {
-    list.innerHTML = '<div class="empty">获取失败</div>';
+    renderInlineError(list, res, '获取歌单失败');
     return;
   }
   
@@ -1184,11 +1406,11 @@ async function loadQQUserPlaylists(page = 1) {
   if (pagination) pagination.innerHTML = '';
 
   const offset = (page - 1) * PAGE_SIZE;
-  const res = await qqApi(`/playlist/user?offset=${offset}&limit=${PAGE_SIZE}`);
+  const res = await qqApi(`/playlist/user?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'QQ_PLAYLIST_USER');
   isLoadingQQPlaylists = false;
 
   if (!res.success) {
-    list.innerHTML = `<div class="empty">${escapeHtml(res.message || '获取QQ歌单失败')}</div>`;
+    renderInlineError(list, res, '获取QQ歌单失败');
     return;
   }
 
@@ -1244,11 +1466,11 @@ async function loadQQFavorites(page = 1) {
   if (pagination) pagination.innerHTML = '';
 
   const offset = (page - 1) * PAGE_SIZE;
-  const res = await qqApi(`/favorites?offset=${offset}&limit=${PAGE_SIZE}`);
+  const res = await qqApi(`/favorites?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'QQ_FAVORITES_LIST');
   isLoadingQQFavorites = false;
 
   if (!res.success) {
-    list.innerHTML = `<div class="empty">${escapeHtml(res.message || '获取QQ收藏失败')}</div>`;
+    renderInlineError(list, res, '获取QQ收藏失败');
     return;
   }
 
@@ -1304,11 +1526,11 @@ async function loadQQHistory(page = 1) {
   if (pagination) pagination.innerHTML = '';
 
   const offset = (page - 1) * PAGE_SIZE;
-  const res = await qqApi(`/history/recent?offset=${offset}&limit=${PAGE_SIZE}`);
+  const res = await qqApi(`/history/recent?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'QQ_HISTORY_RECENT');
   isLoadingQQHistory = false;
 
   if (!res.success) {
-    list.innerHTML = `<div class="empty">${escapeHtml(res.message || '获取QQ最近播放失败')}</div>`;
+    renderInlineError(list, res, '获取QQ最近播放失败');
     return;
   }
 
@@ -1363,11 +1585,11 @@ async function loadFavorites(page = 1) {
   document.getElementById('favoritesPagination').innerHTML = '';
 
   const offset = (page - 1) * PAGE_SIZE;
-  const res = await api(`/favorites?offset=${offset}&limit=${PAGE_SIZE}`);
+  const res = await api(`/favorites?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'FAVORITES_LIST');
   isLoadingFavorites = false;
   
   if (!res.success) {
-    list.innerHTML = '<div class="empty">获取失败</div>';
+    renderInlineError(list, res, '获取收藏失败');
     return;
   }
   
@@ -1421,11 +1643,11 @@ async function loadHistory(page = 1) {
   document.getElementById('historyPagination').innerHTML = '';
 
   const offset = (page - 1) * PAGE_SIZE;
-  const res = await api(`/history/recent?offset=${offset}&limit=${PAGE_SIZE}`);
+  const res = await api(`/history/recent?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'HISTORY_RECENT');
   isLoadingHistory = false;
   
   if (!res.success) {
-    list.innerHTML = '<div class="empty">获取失败</div>';
+    renderInlineError(list, res, '获取最近播放失败');
     return;
   }
   
@@ -1475,7 +1697,8 @@ async function updateFavoriteBtn() {
 
   const platform = currentPlaylist._platform === 'qq' ? 'qq' : 'netease';
   const callApi = platform === 'qq' ? qqApi : api;
-  const res = await callApi('/favorites/check/' + currentPlaylist.id);
+  const scope = platform === 'qq' ? 'QQ_FAVORITES_CHECK' : 'FAVORITES_CHECK';
+  const res = await callApi('/favorites/check/' + currentPlaylist.id, {}, scope);
 
   if (res.success && res.data.favorited) {
     btn.innerHTML = '已收藏';
@@ -1492,6 +1715,7 @@ async function addFavorite() {
   if (!currentPlaylist) return;
   const platform = currentPlaylist._platform === 'qq' ? 'qq' : 'netease';
   const callApi = platform === 'qq' ? qqApi : api;
+  const scope = platform === 'qq' ? 'QQ_FAVORITES_ADD' : 'FAVORITES_ADD';
   const res = await callApi('/favorites', {
     method: 'POST',
     body: JSON.stringify({
@@ -1499,7 +1723,7 @@ async function addFavorite() {
       playlistName: currentPlaylist.name,
       playlistCover: currentPlaylist.cover
     })
-  });
+  }, scope);
   if (res.success) {
     showToast('收藏成功');
     updateFavoriteBtn();
@@ -1509,14 +1733,15 @@ async function addFavorite() {
       loadFavorites(1);
     }
   } else {
-    showToast(res.message || '收藏失败', 'error');
+    showActionError(res, '收藏失败');
   }
 }
 
 async function removeFavorite(playlistId, updateBtn = false, platform = '') {
   const targetPlatform = platform || 'netease';
   const callApi = targetPlatform === 'qq' ? qqApi : api;
-  const res = await callApi('/favorites/' + playlistId, { method: 'DELETE' });
+  const scope = targetPlatform === 'qq' ? 'QQ_FAVORITES_REMOVE' : 'FAVORITES_REMOVE';
+  const res = await callApi('/favorites/' + playlistId, { method: 'DELETE' }, scope);
   if (res.success) {
     showToast('已取消收藏');
     if (targetPlatform === 'qq') {
@@ -1525,6 +1750,8 @@ async function removeFavorite(playlistId, updateBtn = false, platform = '') {
       loadFavorites(favoritePage);
     }
     if (updateBtn) updateFavoriteBtn();
+  } else {
+    showActionError(res, '取消收藏失败');
   }
 }
 
@@ -1612,25 +1839,35 @@ async function loadAllPlaylists(page = 1) {
   if (token) promises.push(loadUserPlaylistsData());
   if (qqToken) promises.push(loadQQUserPlaylistsData());
 
-  await Promise.all(promises);
+  const results = await Promise.all(promises);
   isLoadingPlaylists = false;
+
+  const failed = results.filter(item => item && item.success === false).map(item => item.error);
+  if (results.length > 0 && failed.length === results.length) {
+    renderInlineError(list, failed[0], '获取歌单失败');
+    return;
+  }
 
   playlistPage = page === 0 ? 1 : page;
   renderAllPlaylists();
 }
 
 async function loadUserPlaylistsData() {
-  const res = await api('/playlist/user?offset=0&limit=100');
+  const res = await api('/playlist/user?offset=0&limit=100', {}, 'PLAYLIST_USER');
   if (res.success) {
     userPlaylists = (res.data || []).map(p => ({ ...p, _platform: 'netease' }));
+    return { success: true };
   }
+  return { success: false, error: res };
 }
 
 async function loadQQUserPlaylistsData() {
-  const res = await qqApi('/playlist/user?offset=0&limit=100');
+  const res = await qqApi('/playlist/user?offset=0&limit=100', {}, 'QQ_PLAYLIST_USER');
   if (res.success) {
     qqUserPlaylists = (res.data || []).map(p => ({ ...p, _platform: 'qq' }));
+    return { success: true };
   }
+  return { success: false, error: res };
 }
 
 function renderAllPlaylists() {
