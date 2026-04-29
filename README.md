@@ -256,3 +256,6 @@ environment:
 ## License
 
 MIT
+
+# 友情链接
+(Linux.do)[https://linux.do]

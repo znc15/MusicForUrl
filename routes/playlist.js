@@ -257,7 +257,7 @@ router.get('/url', auth, (req, res) => {
         },
         {
           type: 'hls',
-          label: 'HLS 转码（VRChat 推荐）',
+          label: 'HLS 转码',
           url: hlsUrl,
           note: 'VRChat 兼容性最佳，带封面视频。首次播放需等待转码，后续自动缓存。'
         }
