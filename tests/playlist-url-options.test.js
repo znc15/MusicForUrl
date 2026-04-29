@@ -62,11 +62,15 @@ test('网易 /url 返回 hls + lite 且 default=hls', async () => {
   assert.equal(data.default, 'hls');
 
   const types = (data.urls || []).map((x) => x.type);
-  assert.deepEqual(types, ['hls', 'lite']);
+  assert.deepEqual(types, ['hls', 'mp4', 'lite']);
 
   const hls = data.urls.find((x) => x.type === 'hls');
   assert.ok(hls);
   assert.match(hls.url, /\/api\/hls\/.+\/123456\/stream\.m3u8$/);
+
+  const mp4 = data.urls.find((x) => x.type === 'mp4');
+  assert.ok(mp4);
+  assert.match(mp4.url, /\/api\/mp4\/.+\/123456\/\{songId\}\.mp4$/);
 
   const lite = data.urls.find((x) => x.type === 'lite');
   assert.ok(lite);
@@ -88,11 +92,15 @@ test('QQ /url 返回 hls + lite 且 default=hls', async () => {
   assert.equal(data.default, 'hls');
 
   const types = (data.urls || []).map((x) => x.type);
-  assert.deepEqual(types, ['hls', 'lite']);
+  assert.deepEqual(types, ['hls', 'mp4', 'lite']);
 
   const hls = data.urls.find((x) => x.type === 'hls');
   assert.ok(hls);
   assert.match(hls.url, /\/api\/qq\/hls\/.+\/888999\/stream\.m3u8$/);
+
+  const mp4 = data.urls.find((x) => x.type === 'mp4');
+  assert.ok(mp4);
+  assert.match(mp4.url, /\/api\/qq\/mp4\/.+\/888999\/\{songId\}\.mp4$/);
 
   const lite = data.urls.find((x) => x.type === 'lite');
   assert.ok(lite);

@@ -107,6 +107,14 @@ const hlsSegmentLimiter = rateLimit({
   }
 });
 
+const mp4Limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_MP4) || 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'MP4 请求过于频繁，请稍后再试' }
+});
+
 app.use('/api/', globalLimiter);
 
 app.get('/health', (req, res) => {
@@ -158,6 +166,12 @@ if (process.env.SITE_PASSWORD) {
     if (req.path.startsWith('/api/qq/hls/') && !req.path.startsWith('/api/qq/hls/cache')) {
       return next();
     }
+    if (req.path.startsWith('/api/mp4/')) {
+      return next();
+    }
+    if (req.path.startsWith('/api/qq/mp4/')) {
+      return next();
+    }
 
     if (req.path.startsWith('/api/qq/song/')) {
       return next();
@@ -206,6 +220,8 @@ app.use('/api/song', require('./routes/song'));
 app.use('/api/img', require('./routes/img'));
 app.use('/api/hls', hlsStreamLimiter, hlsSegmentLimiter, require('./routes/hls'));
 app.use('/api/qq/hls', hlsStreamLimiter, hlsSegmentLimiter, require('./routes/hls'));
+app.use('/api/mp4', mp4Limiter, require('./routes/mp4'));
+app.use('/api/qq/mp4', mp4Limiter, require('./routes/mp4'));
 app.use('/api/favorites', require('./routes/favorite'));
 app.use('/api/history', require('./routes/history'));
 

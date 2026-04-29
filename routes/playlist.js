@@ -243,6 +243,7 @@ router.get('/url', auth, (req, res) => {
   const baseUrl = getBaseUrl(req);
   const hlsUrl = `${baseUrl}/api/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
   const liteUrl = `${baseUrl}/api/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
+  const mp4Url = `${baseUrl}/api/mp4/${encodeURIComponent(playbackToken)}/${playlistId}/{songId}.mp4`;
 
   res.json({
     success: true,
@@ -254,6 +255,12 @@ router.get('/url', auth, (req, res) => {
           label: 'HLS 转码（VRChat 推荐）',
           url: hlsUrl,
           note: 'VRChat 兼容性最佳，带封面视频。首次播放需等待转码，后续自动缓存。'
+        },
+        {
+          type: 'mp4',
+          label: 'MP4 封面视频（VRChat 单曲）',
+          url: mp4Url,
+          note: '封面图 + 音频直封 MP4，无需重编码音频。按单曲生成，首次需等待，后续自动缓存。'
         },
         {
           type: 'lite',
