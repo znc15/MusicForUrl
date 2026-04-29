@@ -255,33 +255,26 @@ router.get('/url', qqAuth, (req, res) => {
   const baseUrl = getBaseUrl(req);
   const hlsUrl = `${baseUrl}/api/qq/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
   const liteUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
-  const mp4Url = `${baseUrl}/api/qq/mp4/${encodeURIComponent(playbackToken)}/${playlistId}/{songId}.mp4`;
 
   res.json({
     success: true,
     data: {
-      url: hlsUrl,
+      url: liteUrl,
       urls: [
-        {
-          type: 'hls',
-          label: 'HLS 转码（VRChat 推荐）',
-          url: hlsUrl,
-          note: 'VRChat 兼容性最佳，带封面视频。首次播放需等待转码，后续自动缓存。'
-        },
-        {
-          type: 'mp4',
-          label: 'MP4 封面视频（VRChat 单曲）',
-          url: mp4Url,
-          note: '封面图 + 音频直封 MP4，无需重编码音频。按单曲生成，首次需等待，后续自动缓存。'
-        },
         {
           type: 'lite',
           label: '轻量 M3U8（仅音频）',
           url: liteUrl,
           note: '无需转码，即时播放。VRChat 可能不支持，建议在支持 HLS 直播流的播放器中使用。'
+        },
+        {
+          type: 'hls',
+          label: 'HLS 转码（VRChat 推荐）',
+          url: hlsUrl,
+          note: 'VRChat 兼容性最佳，带封面视频。首次播放需等待转码，后续自动缓存。'
         }
       ],
-      default: 'hls'
+      default: 'lite'
     }
   });
 });
