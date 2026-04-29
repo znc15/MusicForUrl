@@ -257,5 +257,5 @@ environment:
 
 MIT
 
-# 友情链接
-(Linux.do)[https://linux.do]
+## 友情链接
+[Linux.do](https://linux.do)
