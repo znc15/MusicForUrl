@@ -253,7 +253,7 @@ router.get('/url', qqAuth, (req, res) => {
   });
 
   const baseUrl = getBaseUrl(req);
-  const hlsUrl = `${baseUrl}/api/qq/hls/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
+  const hlsUrl = `${baseUrl}/api/qq/hls/${encodeURIComponent(playbackToken)}/${playlistId}/master.m3u8`;
   const liteUrl = `${baseUrl}/api/qq/playlist/m3u8/${encodeURIComponent(playbackToken)}/${playlistId}/stream.m3u8`;
 
   res.json({

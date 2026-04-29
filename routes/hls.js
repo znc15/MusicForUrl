@@ -1108,6 +1108,34 @@ function getBaseUrl(req) {
   return `${req.protocol}://${req.get('host')}`;
 }
 
+// master playlist：为 yt-dlp / VRChat 提供 STREAM-INF 元信息
+router.get('/:token/:playlistId/master.m3u8', async (req, res) => {
+  const { token, playlistId } = req.params;
+  const source = getSourceFromReq(req);
+
+  if (!isLikelyToken(token)) {
+    return res.status(400).send('#EXTM3U\n#EXT-X-ERROR:Invalid token format');
+  }
+  if (!isValidNumericId(playlistId)) {
+    return res.status(400).send('#EXTM3U\n#EXT-X-ERROR:Invalid playlist ID');
+  }
+
+  const user = resolveUserFromAccessToken(token, playlistId, source);
+  if (!user) {
+    return res.status(401).send('#EXTM3U\n#EXT-X-ERROR:Invalid token');
+  }
+
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.send(
+    '#EXTM3U\n' +
+    '#EXT-X-VERSION:3\n' +
+    '#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"\n' +
+    'stream.m3u8'
+  );
+});
+
 router.get('/:token/:playlistId/stream.m3u8', async (req, res) => {
   const { token, playlistId } = req.params;
   const source = getSourceFromReq(req);

@@ -70,7 +70,7 @@ test('网易 /url 返回 lite + mp4 + hls 且 default=lite', async () => {
 
   const hls = data.urls.find((x) => x.type === 'hls');
   assert.ok(hls);
-  assert.match(hls.url, /\/api\/hls\/.+\/123456\/stream\.m3u8$/);
+  assert.match(hls.url, /\/api\/hls\/.+\/123456\/master\.m3u8$/);
 
   // data.url 应与 lite url 一致
   assert.equal(data.url, lite.url);
@@ -96,7 +96,7 @@ test('QQ /url 返回 lite + mp4 + hls 且 default=lite', async () => {
 
   const hls = data.urls.find((x) => x.type === 'hls');
   assert.ok(hls);
-  assert.match(hls.url, /\/api\/qq\/hls\/.+\/888999\/stream\.m3u8$/);
+  assert.match(hls.url, /\/api\/qq\/hls\/.+\/888999\/master\.m3u8$/);
 
   // data.url 应与 lite url 一致
   assert.equal(data.url, lite.url);
