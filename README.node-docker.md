@@ -244,7 +244,7 @@ environment:
 |---|---|---|
 | `COVER_WIDTH` | 输出宽度 | `1920` |
 | `COVER_HEIGHT` | 输出高度 | `1080` |
-| `COVER_FPS` | 帧率（静态封面建议 1~5，可显著降压） | `5` | 
+| `COVER_FPS` | 帧率（静态封面建议 1~5，可显著降压） | `5` |
 | `DEFAULT_COVER_URL` | 默认封面 URL | 内置默认值 |
 
 ### Docker 构建参数（可选）
