@@ -66,3 +66,10 @@ CREATE INDEX IF NOT EXISTS play_logs_user_playlist_time_idx ON play_logs(user_id
 CREATE INDEX IF NOT EXISTS play_logs_user_song_time_idx ON play_logs(user_id, playlist_id, song_id, played_at_ms DESC);
 CREATE INDEX IF NOT EXISTS play_logs_user_time_idx ON play_logs(user_id, played_at_ms DESC, id DESC);
 CREATE INDEX IF NOT EXISTS play_logs_time_idx ON play_logs(played_at_ms);
+
+CREATE TABLE IF NOT EXISTS song_sources (
+  cache_key TEXT PRIMARY KEY,
+  source_json TEXT NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS song_sources_expiry_idx ON song_sources(expires_at_ms);

@@ -218,7 +218,7 @@ const QUALITY_LEVELS = {
   high: { level: 'exhigh', bitrate: 320000 },
 };
 
-async function getSongUrl(songId, cookie, env) {
+async function getSongResource(songId, cookie, env) {
   const quality = mp3Quality(env.MUSIC_QUALITY);
   const selected = QUALITY_LEVELS[quality] || QUALITY_LEVELS.low;
   const ids = JSON.stringify([String(songId)]);
@@ -228,7 +228,12 @@ async function getSongUrl(songId, cookie, env) {
         ids, level: selected.level, encodeType: 'flac',
       }, { cookie });
       const url = result.body?.data?.[0]?.url;
-      if (result.body?.code === 200 && url) return url;
+      if (result.body?.code === 301) return { code: 301 };
+      if (result.body?.code === 200 && url) {
+        const item = result.body.data[0];
+        return { url, bitrate: item.br || selected.bitrate, format: item.type || 'mp3',
+          size: item.size, trial: !!item.freeTrialInfo, quality, expiresAt: Date.now() + Math.min(Number(item.expi) || 90, 90) * 1000 };
+      }
     } catch (_) {
       // Older account and regional responses may still require the bitrate endpoint.
     }
@@ -236,11 +241,17 @@ async function getSongUrl(songId, cookie, env) {
   const result = await requestNetease('/api/song/enhance/player/url', {
     ids, br: selected.bitrate,
   }, { cookie });
-  if (result.body?.code !== 200) return null;
-  return result.body?.data?.[0]?.url || null;
+  if (result.body?.code !== 200) return { code: result.body?.code };
+  const item = result.body?.data?.[0];
+  return item?.url ? { url: item.url, bitrate: item.br || selected.bitrate, format: item.type || 'mp3',
+    size: item.size, trial: !!item.freeTrialInfo, quality, expiresAt: Date.now() + Math.min(Number(item.expi) || 90, 90) * 1000 } : null;
+}
+
+async function getSongUrl(songId, cookie, env) {
+  return (await getSongResource(songId, cookie, env))?.url || null;
 }
 
 export {
-  checkLoginStatus, checkQRCode, createQRCode, getPlaylistDetail, getSongUrl,
+  checkLoginStatus, checkQRCode, createQRCode, getPlaylistDetail, getSongUrl, getSongResource,
   getUserPlaylists, loginWithPhone, sendCaptcha,
 };

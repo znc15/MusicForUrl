@@ -16,6 +16,7 @@
 | `.list-item`、`.url-option` | 支持悬浮的鼠标进入/离开 | 文档事件委托调用 `gsap.to`：上浮 2px，渐入玻璃高光；触屏关闭悬浮效果 |
 | 按钮、返回按钮、主题图标 | 指针按下/松开、Enter/Space | 事件委托统一缩放反馈，取消或窗口失焦时恢复 |
 | `#resultSection`、`#toast` | 生成成功、平台切换、提示更新/超时 | `reveal` / `hide` / `toast` 控制淡入淡出与短距离位移；重复提示替换旧计时器 |
+| `public/js/main.js` → `toggleTheme` | 点击亮色 / 深色开关 | `MfuMotion.theme` 采样当前与目标 CSS 调色板，GSAP 同步插值背景、文字、边框和玻璃色；连续切换中断旧 Timeline |
 
 截图中的个人中心同时调整为紧凑玻璃列表：独立圆角行、统一封面和操作按钮尺寸、玻璃胶囊 Tab 与分页。保持天蓝与白色，说明文字不额外加入界面。
 
@@ -33,6 +34,7 @@
 | 卡片悬浮 | 180ms | 180ms | 0 | 上浮 2px，高光渐变 | `power2.out` |
 | 按钮 | 按下 90ms | 松开 160ms | 0 | scale=0.97→1 | `power2.out` |
 | 提示 | 200ms | 150ms | 停留 3 秒 | y=10px→0 | `power2.out` |
+| 亮暗主题 | 360ms | 同步 | 0 | 颜色渐变，图标 -35° / scale 0.85→1 | `power2.inOut` |
 
 ## 复用示例
 
@@ -50,6 +52,10 @@
 ```js
 MfuMotion.select(buttons, panels, selectedIndex);
 MfuMotion.listContent(list, renderedHtml);
+MfuMotion.theme(() => {
+  document.documentElement.dataset.theme = 'dark';
+  localStorage.setItem('theme', 'dark');
+});
 
 // motion.js 中的核心滑块实现；参数均来自 CONFIG。
 gsap.to(marker, {

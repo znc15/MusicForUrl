@@ -1,0 +1,14 @@
+{
+  "name": "musicforurl-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare:docs": "node scripts/sync-docs.mjs",
+    "build": "npm run prepare:docs && vitepress build",
+    "dev": "npm run prepare:docs && vitepress dev --host 127.0.0.1",
+    "preview": "vitepress preview --host 127.0.0.1"
+  },
+  "devDependencies": { "vitepress": "1.6.4", "gsap": "3.15.0" },
+  "overrides": { "vite": "6.4.3" },
+  "engines": { "node": ">=24" }
+}

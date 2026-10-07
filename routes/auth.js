@@ -269,6 +269,7 @@ router.get('/status', async (req, res) => {
     data: {
       logged: true,
       user: {
+        userId: user.netease_id,
         nickname: user.nickname,
         avatar: user.avatar,
         vipType: user.vip_type

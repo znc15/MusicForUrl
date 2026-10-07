@@ -11,7 +11,8 @@
     hover: { duration: 0.18, distance: 2, ease: 'power2.out' },
     press: { down: 0.09, up: 0.16, scale: 0.97, ease: 'power2.out' },
     toast: { enter: 0.20, out: 0.15, hold: 3000, distance: 10, exitDistance: 8, ease: 'power2.out' },
-    loading: { fade: 0.14, opacity: 0.55, spin: 0.8 }
+    loading: { fade: 0.14, opacity: 0.55, spin: 0.8 },
+    theme: { duration: 0.36, ease: 'power2.inOut' }
   });
   const jobs = new Map();
   const indicators = new Map();
@@ -357,6 +358,30 @@
     hydrate();
   }
 
-  global.MfuMotion = Object.freeze({ CONFIG, page, select, syncIndicator, loading, listContent, pagination, reveal, hide, modal, toast, hydrate, stop });
+  function theme(apply) {
+    const root = document.documentElement, body = document.body;
+    const names = ['--bg', '--card-bg', '--surface-alt', '--card-border', '--text', '--text-dim',
+      '--accent-hover', '--accent-light', '--accent-text', '--danger', '--btn-text', '--glass-fill',
+      '--glass-edge', '--glass-highlight', '--glass-sheen', '--control-fill', '--ambient-glow'];
+    const read = () => Object.fromEntries(names.map(name => [name, getComputedStyle(root).getPropertyValue(name).trim()]));
+    const before = read(), background = getComputedStyle(body).backgroundImage;
+    stop(root);
+    apply();
+    const after = read(), nextBackground = getComputedStyle(body).backgroundImage;
+    const icon = document.querySelector('.theme-icon');
+    return run(root, timeline => {
+      timeline.fromTo(root, before, { ...after, duration: duration(CONFIG.theme.duration), ease: CONFIG.theme.ease }, 0);
+      timeline.fromTo(body, { backgroundImage: background }, { backgroundImage: nextBackground,
+        duration: duration(CONFIG.theme.duration), ease: CONFIG.theme.ease }, 0);
+      if (icon && !reduced) timeline.fromTo(icon, { rotation: -35, scale: .85 },
+        { rotation: 0, scale: 1, duration: CONFIG.theme.duration, ease: 'power2.out' }, 0);
+    }, () => {
+      names.forEach(name => root.style.removeProperty(name));
+      body.style.removeProperty('background-image');
+      if (icon) clear(icon);
+    }, () => {});
+  }
+
+  global.MfuMotion = Object.freeze({ CONFIG, page, select, syncIndicator, loading, listContent, pagination, reveal, hide, modal, toast, hydrate, stop, theme });
   document.addEventListener('DOMContentLoaded', install, { once: true });
 })(window);

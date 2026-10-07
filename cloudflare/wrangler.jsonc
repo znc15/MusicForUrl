@@ -4,6 +4,12 @@
   "main": "./src/index.js",
   "compatibility_date": "2026-10-03",
   "workers_dev": true,
+  "vars": {
+    "AUDIO_CACHE_ENABLED": "true"
+  },
+  "r2_buckets": [
+    { "binding": "AUDIO_CACHE", "bucket_name": "music-for-url-private-cache" }
+  ],
   "triggers": {
     "crons": ["17 3 * * *"]
   },

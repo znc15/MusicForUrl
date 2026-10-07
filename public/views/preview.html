@@ -11,8 +11,14 @@
       <span class="preview-play-mark"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 11 7-11 7Z"/></svg></span>
       <h2>打开视频或音频</h2><p>MP4 · WebM · M3U8 · MP3</p>
     </div>
-    <div class="preview-audio-art" id="previewAudioArt" hidden aria-hidden="true"><span class="audio-orbit"><svg viewBox="0 0 24 24"><path d="M5 10v4m5-9v14m5-11v8m5-5v2"/></svg></span><span>音频预览</span></div>
+    <div class="preview-audio-art" id="previewAudioArt" hidden><img id="previewCover" src="/placeholder.svg" alt="音乐封面" decoding="async" width="240" height="240"><span id="previewArtist">音频预览</span></div>
+  </div>
+  <div id="previewMusicControls" class="player-controls" hidden>
+    <div class="track-navigation"><button class="btn btn-ghost compact-btn" type="button" id="previewPrev" aria-label="上一首">上一首</button><span id="previewTrackCount"></span><button class="btn btn-ghost compact-btn" type="button" id="previewNext" aria-label="下一首">下一首</button></div>
+    <div class="quality-control"><label for="previewQuality">音质</label><select id="previewQuality" aria-describedby="previewQualityHelp previewQualityNotice"></select><span class="subtle-badge" id="previewFormat">MP3</span></div>
+    <small id="previewQualityHelp"></small><p id="previewQualityNotice" role="status" aria-live="polite"></p>
   </div>
   <div class="preview-meta"><div><h2 id="previewTitle">尚未选择媒体</h2><p id="previewStatus" role="status" aria-live="polite">选择本地文件，或打开可播放的媒体直链。</p></div><button class="btn btn-ghost compact-btn" type="button" id="previewClear" disabled>清空</button></div>
 </section>
+<section class="queue-panel glass" id="previewQueuePanel" hidden><h2>播放队列</h2><div id="previewQueue" class="preview-queue"></div></section>
 <p class="view-footnote">本地文件不上传；HLS 直链需允许跨域访问。本站歌单为纯音频。</p>

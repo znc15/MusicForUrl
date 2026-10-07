@@ -2,6 +2,7 @@ import qqmusic from '../../lib/qqmusic.js';
 import * as netease from './netease.js';
 import { packedAudioResponse } from './packed-audio.js';
 import { PLAY_LOG_RETENTION_MS, prunePlaybackLogs, recordPlayback } from './playback-history.js';
+import { handlePlayer, resolvePlayerSource, proxyPlayerSource } from './player.js';
 import {
   createPlaybackToken, createSession, decryptCookie, getPlaybackUser, getSessionUser,
   logout, requireSecret, sha256Hex,
@@ -291,12 +292,15 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
     const playlist = await getPlaylist(env, user, playlistId);
     const song = playlist.tracks.find((track) => String(track.id) === songId);
     if (!song) return fail('歌曲不属于该歌单', 403);
-    const destination = await songUrl(env, user, songId);
+    const resource = await resolvePlayerSource(env, user, songId, url.searchParams.get('quality') || env.MUSIC_QUALITY || 'low');
+    const destination = resource.url;
     if (!destination) return fail('歌曲不可播放，可能无版权或需要对应会员权限', 404);
     const record = () => ctx.waitUntil(recordPlayback(env, user.id, playlistId, song)
       .catch(error => console.error('[Playback history]', error)));
     if (url.searchParams.get('hls') === '1') {
-      return packedAudioResponse(request, destination, platform, fetch,
+      const fetchAudio = (input, options) => proxyPlayerSource(new Request(input, options),
+        env, ctx, user, songId, resource, false, request.method !== 'HEAD');
+      return packedAudioResponse(request, destination, platform, fetchAudio,
         request.method === 'GET' ? record : undefined);
     }
     const response = new Response(null, { status: 302, headers: {
@@ -420,6 +424,7 @@ async function api(request, env, ctx) {
   if (pathname === '/api/health') return json({ status: 'ok', timestamp: Date.now() });
   if (!env.DB) return fail('未绑定 D1 数据库', 503);
   requireSecret(env);
+  if (pathname.startsWith('/api/player/')) return handlePlayer(request, env, ctx);
 
   const platform = pathname.startsWith('/api/qq/') ? 'qq' : 'netease';
   const path = pathname.slice(platform === 'qq' ? '/api/qq'.length : '/api'.length);
@@ -447,6 +452,7 @@ async function api(request, env, ctx) {
 export default {
   scheduled(_event, env, ctx) {
     ctx.waitUntil(prunePlaybackLogs(env));
+    ctx.waitUntil(env.DB.prepare('DELETE FROM song_sources WHERE expires_at_ms < ?').bind(Date.now()).run());
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -455,6 +461,7 @@ export default {
       return await api(request, env, ctx);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) return fail('请求体不能超过 64 KiB', 413);
+      if (Number.isInteger(error.status) && error.status >= 400 && error.status <= 599) return fail(error.message, error.status);
       console.error('[API]', error);
       return fail('请求处理失败，请稍后重试', 500);
     }

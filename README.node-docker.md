@@ -1,6 +1,14 @@
-# MusicForUrl · Node.js / Docker 旧版
+# MusicForUrl · Node.js / Docker
 
-本文保留需要自建服务器的 Node.js / Docker 部署说明。当前推荐的 Cloudflare 版本、工作台功能和部署步骤请查看[项目 README](README.md)。下面的命令均在仓库根目录执行。
+自有服务器与 Cloudflare 版本共用工作台、账号管理和 `/api/player/*` 播放器接口。本文保留原有 FFmpeg 与 Docker 功能说明。下面的命令均在仓库根目录执行；两种部署差异见[部署指南](website/guide/deployment.md)。
+
+## 新版逐首播放器
+
+无需 FFmpeg 即可预览 MP3 / FLAC，提供音质切换、上一首 / 下一首、队列、独立封面与实际格式提示。FLAC 需要真实账号权限及浏览器支持，解码失败回退 MP3；音质不可用则降级，试听和登录过期有提示。
+
+`AUDIO_CACHE_ENABLED=true` 启用私有本地缓存，默认 `data/player-cache`、最多 256 MiB；`PLAYER_CACHE_DIR` 可指定持久目录，`DATA_DIR` 配置 SQLite 数据目录。Node 未实现 R2 S3 驱动。
+
+新播放器历史按平台 / 用户记录，完成媒体响应后写入，5 分钟去重、每分钟 12 条、保留 30 天 / 1,000 条；账号已有新记录时历史入口展示新表，旧记录保留。网页音质切换不改变旧 HLS / MP4 转码文件。
 
 将音乐歌单转换为可在视频播放器中播放的 M3U8 链接，支持多用户登录、VIP 歌曲播放。
 

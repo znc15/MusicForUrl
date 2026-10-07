@@ -10,7 +10,7 @@ import {
 } from '../src/playback-history.js';
 import {
   createPlaybackToken, createSession, decryptCookie, getPlaybackUser, getSessionUser,
-  logout, requireSecret,
+  logout, requireSecret, sha256Hex,
 } from '../src/security.js';
 
 function testEnv() {
@@ -63,6 +63,64 @@ async function signedInUser(env, platform, platformUserId) {
   const user = await getSessionUser(env, request, platform, new URL(request.url));
   return { user, token, cookie };
 }
+
+test('new Worker player authorizes before R2, supports ranges, isolates accounts and revokes warmed links', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const pending = [], objects = new Map(); let storageReads = 0, originReads = 0;
+  env.AUDIO_CACHE_ENABLED = 'true';
+  env.AUDIO_CACHE = {
+    async get(key, options) {
+      storageReads++;
+      const item = objects.get(key); if (!item) return null;
+      const match = options?.range?.get('range')?.match(/^bytes=(\d+)-(\d+)$/);
+      const offset = match ? Number(match[1]) : 0;
+      const length = match ? Number(match[2]) - offset + 1 : item.bytes.length;
+      return { size: item.bytes.length, body: item.bytes.slice(offset, offset + length),
+        range: match ? { offset, length } : undefined, httpEtag: '"fixture"',
+        customMetadata: item.meta.customMetadata,
+        writeHttpMetadata(headers) { headers.set('content-type', item.meta.httpMetadata.contentType); } };
+    },
+    async put(key, bytes, meta) { objects.set(key, { bytes, meta }); },
+    async delete(key) { objects.delete(key); },
+  };
+  const ctx = { waitUntil(promise) { pending.push(promise); } };
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async url => {
+    assert.match(String(url), /^https:\/\/m1.music\.126\.net\//); originReads++;
+    return new Response('0123456789', { headers: { 'content-length': '10', 'content-type': 'audio/mpeg' } });
+  };
+  const accounts = [await signedInUser(env, 'netease', '1001'), await signedInUser(env, 'netease', '1002')];
+  for (const { user } of accounts) {
+    await env.DB.prepare('INSERT INTO playlists (user_id, playlist_id, name, cover, song_count, songs_json, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(user.id, '123', 'Private playlist', '', 1, JSON.stringify([{ id: '555', name: 'Track', artist: 'Test', duration: 180 }]), Date.now() + 60000).run();
+    const key = await sha256Hex([user.platform, user.id, user.token_hash, '555', 'high'].join(':'));
+    await env.DB.prepare('INSERT INTO song_sources (cache_key, source_json, expires_at_ms) VALUES (?, ?, ?)')
+      .bind(key, JSON.stringify({ url: 'https://m1.music.126.net/song.mp3', format: 'mp3', bitrate: 320000,
+        quality: 'high', resolvedRequestQuality: 'high', trial: false, warnings: [], expiresAt: Date.now() + 60000 }), Date.now() + 60000).run();
+  }
+  const base = 'https://music.example.test/api/player';
+  const call = (path, init) => worker.fetch(new Request(base + path, init), env, ctx);
+  assert.equal((await (await call('/capabilities')).json()).data.privateCache, true);
+  const list = await (await call('/playlist?id=123', { headers: { 'x-token': accounts[0].token } })).json();
+  const query = new URLSearchParams({ platform: 'netease', id: '123', grant: list.data.grant, quality: 'high' });
+  assert.equal((await call('/media/999?' + query)).status, 403); assert.equal(storageReads, 0);
+  const source = await (await call('/resolve/555?' + query)).json();
+  assert.equal(source.data.format, 'mp3'); assert.equal(JSON.stringify(source).includes('music.126.net'), false);
+  const cold = await worker.fetch(new Request(source.data.mediaUrl), env, ctx);
+  assert.equal(cold.headers.get('x-mfu-cache'), 'MISS'); assert.equal(await cold.text(), '0123456789');
+  await Promise.all(pending); assert.equal(objects.size, 1);
+  const warm = await worker.fetch(new Request(source.data.mediaUrl, { headers: { range: 'bytes=2-5' } }), env, ctx);
+  assert.equal(warm.status, 206); assert.equal(warm.headers.get('content-range'), 'bytes 2-5/10');
+  assert.equal(warm.headers.get('x-mfu-cache'), 'HIT'); assert.equal(await warm.text(), '2345'); assert.equal(originReads, 1);
+  const second = await call('/media/555?id=123&quality=high', { headers: { 'x-token': accounts[1].token } });
+  assert.equal(second.headers.get('x-mfu-cache'), 'MISS'); await second.text(); await Promise.all(pending);
+  assert.equal(objects.size, 2);
+  await logout(env, new Request('https://music.example.test/api/auth/logout', { headers: { 'x-token': accounts[0].token } }), 'netease', null, {});
+  const before = storageReads;
+  assert.equal((await worker.fetch(new Request(source.data.mediaUrl), env, ctx)).status, 401);
+  assert.equal(storageReads, before);
+  await Promise.all(pending);
+});
 
 test('placeholder deployment keys are rejected', () => {
   assert.throws(() => requireSecret({ ENCRYPTION_KEY: 'your-32-character-secret-key-here' }));

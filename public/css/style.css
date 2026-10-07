@@ -1,6 +1,7 @@
 :root {
   color-scheme: light;
   --bg: #f4fbff;
+  --ambient-glow: rgb(255 255 255 / 35%);
   --card-bg: rgb(255 255 255 / 48%);
   --surface-alt: rgb(223 245 255 / 35%);
   --card-border: rgb(255 255 255 / 80%);
@@ -28,6 +29,7 @@
 [data-theme="dark"] {
   color-scheme: dark;
   --bg: #142b3c;
+  --ambient-glow: rgb(169 222 250 / 4%);
   --card-bg: rgb(207 238 255 / 9%);
   --surface-alt: rgb(181 225 250 / 5%);
   --card-border: rgb(216 244 255 / 16%);
@@ -50,8 +52,7 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; color: var(--text); background: radial-gradient(ellipse at 15% 0%, rgb(187 232 253 / 42%), transparent 52%), radial-gradient(ellipse at 90% 55%, rgb(135 206 235 / 30%), transparent 48%), linear-gradient(160deg, #ffffff, #eff9ff 68%, #e2f4fd); background-attachment: fixed; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
 [data-theme="dark"] body { background: radial-gradient(ellipse at 15% 0%, rgb(77 156 198 / 16%), transparent 52%), radial-gradient(ellipse at 90% 55%, rgb(135 206 235 / 10%), transparent 48%), linear-gradient(160deg, #142b3c, #19384b 68%, #173247); background-attachment: fixed; }
-body::before { content: ""; position: fixed; pointer-events: none; z-index: -1; width: 80vw; height: 48vh; left: -22vw; top: 30vh; border-radius: 50%; background: rgb(255 255 255 / 35%); filter: blur(32px); transform: rotate(-25deg); }
-[data-theme="dark"] body::before { background: rgb(169 222 250 / 4%); }
+body::before { content: ""; position: fixed; pointer-events: none; z-index: -1; width: 80vw; height: 48vh; left: -22vw; top: 30vh; border-radius: 50%; background: var(--ambient-glow); filter: blur(32px); transform: rotate(-25deg); }
 button, input, textarea { font: inherit; }
 button, a, input, textarea { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
@@ -363,7 +364,23 @@ a { color: inherit; }
 .preview-play-mark .icon { width: 31px; height: 31px; margin-left: -3px; }
 .preview-empty h2 { font-size: 21px; font-weight: 550; }
 .preview-empty p { font-size: 12px; letter-spacing: .6px; color: var(--text-dim); }
-.preview-audio-art { position: absolute; inset: 0 0 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; color: var(--text-dim); font-size: 13px; pointer-events: none; }
+.preview-audio-art { position: absolute; z-index: 3; inset: 16px 12px 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--text-dim); font-size: 13px; pointer-events: none; }
+.preview-audio-art img { width: auto; height: min(224px, calc(100% - 34px)); max-width: 80%; aspect-ratio: 1; object-fit: cover; border-radius: 22px; border: 1px solid var(--glass-edge); box-shadow: var(--shadow-lg); }
+.preview-screen.audio-mode video { position: absolute; inset: auto 0 0; height: 56px; z-index: 2; }
+.player-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; margin-top: 18px; }
+.track-navigation, .quality-control { display: flex; align-items: center; gap: 9px; }
+.quality-control label { font-size: 12px; font-weight: 600; }
+.quality-control select { max-width: min(320px, 65vw); border: 1px solid var(--glass-edge); border-radius: 12px; padding: 9px 12px; color: var(--text); background: var(--control-fill); font: inherit; font-size: 12px; }
+.quality-control option { background: var(--bg); }
+#previewQualityHelp, #previewQualityNotice { flex-basis: 100%; color: var(--text-dim); font-size: 12px; }
+#previewQualityNotice:empty { display: none; }
+.queue-panel { margin-top: 22px; padding: 22px; border-radius: 24px; }
+.queue-panel h2 { font-size: 15px; margin-bottom: 14px; }
+.preview-queue { max-height: 380px; overflow: auto; display: grid; gap: 6px; }
+.queue-track { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 12px; border: 1px solid transparent; border-radius: 12px; padding: 10px 12px; text-align: left; background: transparent; color: var(--text); font-size: 12px; }
+.queue-track.active { background: var(--accent-light); border-color: var(--glass-edge); }
+.queue-track strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-track small { color: var(--text-dim); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audio-orbit { display: grid; place-items: center; width: 112px; height: 112px; border: 1px solid var(--glass-edge); border-radius: 50%; background: var(--glass-sheen), var(--glass-fill); box-shadow: 0 0 0 17px rgb(255 255 255 / 12%), 0 0 0 38px rgb(255 255 255 / 7%), inset 0 1px 0 var(--glass-highlight); }
 .audio-orbit svg { width: 47px; height: 47px; stroke: var(--accent-text); fill: none; stroke-width: 1.5; stroke-linecap: round; }
 .preview-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 0; }

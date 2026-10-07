@@ -98,8 +98,32 @@ npm test
 
 可在 Cloudflare 的 Worker 设置中添加 `TOKEN_TTL_HOURS`、`PLAYBACK_TOKEN_TTL_SECONDS`、`CACHE_TTL`、`MUSIC_QUALITY` 等可选变量。密钥应设置为 **Secret**，不要写入 `wrangler.jsonc` 或 Git。
 
+## 私有 R2 缓存
+
+`AUDIO_CACHE` 绑定指向私有桶，`AUDIO_CACHE_ENABLED=true` 启用；当前站点使用专用 `music-for-url-private-cache`。在其他账号部署时先创建桶并更换绑定；不启用则删除绑定并设 `false`。
+
+```sh
+npx wrangler r2 bucket create music-for-url-private-cache
+npx wrangler r2 bucket lifecycle add music-for-url-private-cache expire-audio --prefix audio/v2/ --expire-days 1
+npx wrangler r2 bucket lifecycle add music-for-url-private-cache expire-cover --prefix cover/v2/ --expire-days 2
+```
+
+音频逻辑缓存 1 小时、封面 24 小时，生命周期分别 1 天 / 2 天。音频键包括账号、会话、实际音质、格式与试听状态；读取先验证签名、歌单归属和当前音源，再读缓存。退出撤销旧链接。仅缓存完整音频（最多 16 MiB）与封面（最多 2 MiB），单 isolate 同时填充一个对象。Range 首次请求可能另行下载完整对象；错误、大文件和未知长度回退代理。
+
+网页歌单使用 `/api/player/*` 原生逐首播放，返回实际格式、码率和降级提示，支持 Range。导出 M3U8 保持 Packed Audio，不能对添加 ID3 的完整片段使用原音频字节范围。二者复用缓存。R2 不公开，响应 `private, no-store`，`x-mfu-cache` 用于检查命中。
+
+部署前执行 `npm run db:remote` 添加 `song_sources`，其音源有效期最多 90 秒，Cron 清理过期项。选型和费用见[技术对比](../website/guide/architecture.md)。
+
+## 双部署与官网
+
+Node.js 版本共用播放器 API、音质策略与流代理，以 SQLite / 可选磁盘缓存运行，支持浏览器可解码的 FLAC，旧 FFmpeg 输出保留。两种环境的认证签名和加密数据不能直接互换。
+
+Pages Functions 入口在根目录 `functions/[[path]].js`，配置为 `wrangler.pages.jsonc`。必须设置 D1 / R2 和 Secret，定时清理另配维护 Worker；推荐 Workers Static Assets。步骤见[部署指南](../website/guide/deployment.md)。
+
+官网仅在 [GitHub Pages](https://znc15.github.io/MusicForUrl/) 发布，构建前自动同步仓库四份文档，`.github/workflows/website.yml` 自动构建和发布。
+
 ## 迁移说明
 
-旧版 Express/SQLite 数据不会自动导入 D1。此前使用本地版的用户需要重新登录，收藏和历史记录从新的 D1 开始。原来的 `server.js`、`routes/` 与 `deploy/` 暂时保留，方便对照和回退；Cloudflare 部署只使用 `cloudflare/src/`、`cloudflare/schema.sql`、`lib/qqmusic.js` 与 `public/`。
+旧版 Express/SQLite 数据不会自动导入 D1，需要重新登录，收藏和历史从新数据库开始。`server.js`、`routes/` 与 `deploy/` 继续支持自有服务器。Cloudflare 使用 `cloudflare/src/`、`cloudflare/schema.sql`、共享 `lib/player-*.js` 策略 / API / 代理、`lib/qqmusic.js` 与 `public/`。
 
 网易云与 QQ 音乐接口并非 Cloudflare 平台服务，可能随上游接口或风控变化而失效。部署后应分别用真实账号验证扫码、歌单解析、音频地址和播放器行为。

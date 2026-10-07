@@ -454,7 +454,9 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshAccount: platform => platform === 'qq' ? checkQQLoginStatus() : checkLoginStatus(),
     login: showLogin,
     logout: platform => platform === 'qq' ? logoutQQ() : logout(),
-    generated: () => ({ url: getSelectedGeneratedUrl(), title: currentPlaylist?.name, platform: currentPlaylist?._platform }),
+    generated: () => ({ url: getSelectedGeneratedUrl(), title: currentPlaylist?.name, id: currentPlaylist?.id,
+      cover: currentPlaylist?.cover, platform: currentPlaylist?._platform }),
+    headers: platform => ({ [platform === 'qq' ? 'x-qq-token' : 'x-token']: platform === 'qq' ? qqToken : token }),
     navigate, toast: showToast, escape: escapeHtml, image: imageSrc, preferencesSaved: updateUserUI,
   });
   initTheme();
@@ -541,13 +543,12 @@ function initTheme() {
 
 function toggleTheme() {
   const toggle = document.getElementById('themeToggle');
-  if (toggle && toggle.checked) {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    localStorage.setItem('theme', 'dark');
-  } else {
-    document.documentElement.removeAttribute('data-theme');
-    localStorage.setItem('theme', 'light');
-  }
+  const dark = !!toggle?.checked;
+  motion.theme(() => {
+    if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+    else document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  });
 }
 
 function showAbout() {

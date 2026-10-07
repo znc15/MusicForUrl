@@ -175,7 +175,8 @@
     if (state && badge) state.textContent = badge;
   }
 
-  function disposeMedia() {
+  function disposeMedia(disposePlayer = true) {
+    if (disposePlayer) global.MfuPlayer?.dispose();
     mediaGeneration++;
     hls?.destroy();
     hls = null;
@@ -204,6 +205,8 @@
   }
 
   async function openMedia(selection) {
+    const owned = selection.id ? selection : (!selection.file ? global.MfuPlayer?.selectionFromUrl(selection.url) : null);
+    if (owned) { disposeMedia(false); previewSelection = selection; return global.MfuPlayer.open(owned); }
     disposeMedia();
     video = document.getElementById('previewVideo');
     if (!video) return;
@@ -212,6 +215,10 @@
     const current = () => generation === mediaGeneration && player.isConnected;
     previewSelection = selection;
     const source = selection.file ? (localObjectUrl = URL.createObjectURL(selection.file)) : selection.url;
+    const cover = document.getElementById('previewCover');
+    if (cover) cover.src = selection.cover || '/placeholder.svg';
+    const artist = document.getElementById('previewArtist');
+    if (artist) artist.textContent = '音频预览';
     player.hidden = false;
     document.getElementById('previewEmpty').hidden = true;
     document.getElementById('previewClear').disabled = false;
@@ -283,7 +290,8 @@
 
   function generatedSelection() {
     const generated = context.generated();
-    return generated.url ? { url: generated.url, title: generated.title || '歌单预览', audio: true, platform: generated.platform } : null;
+    return generated.url ? { url: generated.url, title: generated.title || '歌单预览', audio: true,
+      id: generated.id, cover: generated.cover, platform: generated.platform } : null;
   }
 
   function previewGenerated() {
@@ -294,6 +302,8 @@
   }
 
   function mountPreview() {
+    global.MfuPlayer.mount({ platform: context.activePlatform, headers: context.headers,
+      status: setPreviewStatus });
     const previousUrl = previewSelection?.file ? '' : previewSelection?.url || '';
     document.getElementById('previewUrl').value = previousUrl;
     document.getElementById('previewGenerated').disabled = !context.generated().url;
@@ -324,6 +334,10 @@
 
   async function mountAbout() {
     const release = document.getElementById('aboutRelease');
+    const backend = document.getElementById('aboutBackend');
+    fetch('/api/player/capabilities').then(response => response.json()).then(result => {
+      if (backend?.isConnected && result.backend) backend.textContent = result.backend === 'cloudflare' ? 'Cloudflare · D1' : 'Node.js · SQLite';
+    }).catch(() => { if (backend?.isConnected) backend.textContent = '未获取到部署信息'; });
     try {
       const response = await fetch('/app-meta.json', { cache: 'no-cache' });
       if (!response.ok) throw new Error('No build metadata');
@@ -331,7 +345,7 @@
       if (!release.isConnected) return;
       release.textContent = 'v' + meta.version;
       document.getElementById('aboutVersion').textContent = 'v' + meta.version;
-    } catch (_) { if (release.isConnected) release.textContent = 'Cloudflare 版'; }
+    } catch (_) { if (release.isConnected) release.textContent = 'MusicForUrl'; }
   }
 
   global.MfuWorkspace = {
