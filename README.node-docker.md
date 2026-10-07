@@ -1,0 +1,273 @@
+# MusicForUrl · Node.js / Docker
+
+自有服务器与 Cloudflare 版本共用工作台、账号管理和 `/api/player/*` 播放器接口。本文保留原有 FFmpeg 与 Docker 功能说明。下面的命令均在仓库根目录执行；两种部署差异见[部署指南](website/guide/deployment.md)。
+
+## 新版逐首播放器
+
+无需 FFmpeg 即可预览 MP3 / FLAC，提供音质切换、上一首 / 下一首、队列、独立封面与实际格式提示。FLAC 需要真实账号权限及浏览器支持，解码失败回退 MP3；音质不可用则降级，试听和登录过期有提示。
+
+`AUDIO_CACHE_ENABLED=true` 启用私有本地缓存，默认 `data/player-cache`、最多 256 MiB；`PLAYER_CACHE_DIR` 可指定持久目录，`DATA_DIR` 配置 SQLite 数据目录。Node 未实现 R2 S3 驱动。
+
+新播放器历史按平台 / 用户记录，完成媒体响应后写入，5 分钟去重、每分钟 12 条、保留 30 天 / 1,000 条；账号已有新记录时历史入口展示新表，旧记录保留。网页音质切换不改变旧 HLS / MP4 转码文件。
+
+将音乐歌单转换为可在视频播放器中播放的 M3U8 链接，支持多用户登录、VIP 歌曲播放。
+
+服务器进行加密存储Cookie，防止用户信息泄露。
+
+生成链接时提供三种输出：
+- **轻量 M3U8（直链列表）**：几乎不转码/不落盘，服务器压力更小；仅提供音频，VRChat 兼容性取决于播放器实现和房间的域名允许规则。
+- **视频轻量 M3U8（随机背景图）**：基于轻量直链输出音频清单，并附带统一背景图元数据；同一播放链接固定同一张图，图片 API 异常会自动回退歌单封面。
+- **HLS（转码分片）**：兼容性更稳，但会消耗较多 CPU/磁盘（需要 FFmpeg）；当轻量模式无法播放时再切换。
+
+说明：视频轻量是否显示背景图，取决于播放器或上层系统是否识别自定义元数据标签/参数。
+
+## 快速开始
+
+### 本地运行
+
+需要 Node.js 24 或更新版本。
+
+```bash
+npm ci
+cp env.example .env
+# 生产环境必须设置 ENCRYPTION_KEY
+npm start
+```
+
+默认端口 `3000`，可通过 `PORT` 修改。
+
+### Docker 部署
+
+#### 前置条件
+
+- [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)（Docker Desktop 已包含）
+- 系统需安装 FFmpeg（Docker 镜像内已包含，无需额外安装）
+
+#### 1. 准备配置
+
+复制 compose 文件并修改加密密钥：
+
+```bash
+# 编辑 docker-compose.yml，将 ENCRYPTION_KEY 改为你自己的密钥（至少 16 位，建议 32 位）
+# 纯数字务必加引号，例如 "1234567890123456"
+vim deploy/docker-compose.yml
+```
+
+#### 2. 构建并启动
+
+**基础部署**（适用于大多数 VPS）：
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+**按机器规格选择**（需要资源限制生效时加 `--compatibility`）：
+
+| 规格 | 适用场景 | 命令 |
+|---|---|---|
+| 1C1G | 最低配置 VPS、个人使用 | `docker compose -f deploy/docker-compose.1c1g.yml --compatibility up -d --build` |
+| 2C4G | 轻度多人使用 | `docker compose -f deploy/docker-compose.2c4g.yml --compatibility up -d --build` |
+| 4C4G | 多人使用、频繁转码 | `docker compose -f deploy/docker-compose.4c4g.yml --compatibility up -d --build` |
+| 8C8G | 高并发、大量用户 | `docker compose -f deploy/docker-compose.8c8g.yml --compatibility up -d --build` |
+
+> 各规格的详细参数差异见下方 [规格对照表](#docker-规格对照表)。
+
+#### 3. 国内网络加速构建
+
+如果构建时下载依赖慢，可使用国内镜像：
+
+```bash
+docker compose -f deploy/docker-compose.yml build \
+  --build-arg ALPINE_REPO_MIRROR=mirrors.aliyun.com/alpine \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+```
+
+或通过环境变量传入：
+
+```bash
+ALPINE_REPO_MIRROR=mirrors.aliyun.com/alpine \
+NPM_REGISTRY=https://registry.npmmirror.com \
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+#### 4. 数据持久化
+
+默认使用 Docker named volume，数据在容器重建后不会丢失：
+
+```bash
+# 查看 volume 位置
+docker volume ls | grep music
+```
+
+**Linux 如需落盘到宿主机目录**，编辑 compose 文件，将 volumes 改为：
+
+```yaml
+volumes:
+  - ../data:/app/data
+```
+
+#### 5. 常用管理命令
+
+```bash
+# 查看日志
+docker compose -f deploy/docker-compose.yml logs -f
+
+# 重启服务
+docker compose -f deploy/docker-compose.yml restart
+
+# 停止服务
+docker compose -f deploy/docker-compose.yml down
+
+# 停止并删除数据（谨慎）
+docker compose -f deploy/docker-compose.yml down -v
+
+# 重新构建（代码更新后）
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+#### 6. 反向代理配置
+
+以 Nginx 为例：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name music.example.com;
+
+    # SSL 配置省略...
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+对应 compose 环境变量需添加：
+
+```yaml
+environment:
+  TRUST_PROXY: 1          # 单层反向代理
+  BASE_URL: https://music.example.com
+```
+
+#### Docker 规格对照表
+
+| 参数 | 1C1G | 2C4G | 4C4G | 8C8G |
+|---|---|---|---|---|
+| Node 堆内存 | 256MB | 512MB | 1024MB | 2048MB |
+| FFmpeg 并发任务 | 1 | 1 | 2 | 4 |
+| FFmpeg 线程数 | 1 | 1 | 1 | 2 |
+| 等待队列 | 3 | 5 | 10 | 20 |
+| 封面分辨率 | 854x480 | 1280x720 | 1280x720 | 1920x1080 |
+| 封面帧率 | 1 | 2 | 5 | 10 |
+| 缓存容量 | 1GB | 2GB | 8GB | 20GB |
+| 预加载 | 关闭 | 关闭 | 1 首 | 2 首 |
+
+## 配置
+
+完整可复制模板见 `env.example`。下面只列出项目实际使用到的主要配置项。
+
+### 基础
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `PORT` | 服务端口 | `3000` |
+| `NODE_ENV` | 环境标识 | `development` |
+| `ENCRYPTION_KEY` | Cookie 加密密钥（生产环境必填，建议 32 位字符串） | - |
+| `SITE_PASSWORD` | 站点访问密码（可选） | - |
+| `ADMIN_PASSWORD` | 管理接口密码（可选，用于 `/api/hls/cache/*`） | - |
+| `HLS_ADMIN_ENABLED` | 是否启用 HLS 管理接口（`1/true` 开启；默认关闭；需同时设置 `ADMIN_PASSWORD`） | - |
+| `CACHE_TTL` | 歌单缓存时间（秒） | `86400` |
+| `TOKEN_TTL_HOURS` | 登录 token 有效期（小时） | `168` |
+
+### 反向代理
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `BASE_URL` | 公网访问地址（用于生成 m3u8 中的 URL） | - |
+| `TRUST_PROXY` | 信任的代理层数或 IP/子网（不要设为 `true`） | `loopback` |
+
+### 限流（每分钟）
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `RATE_LIMIT_GLOBAL` | 全局 API 限流 | `200` |
+| `RATE_LIMIT_AUTH` | 认证接口限流 | `10` |
+| `RATE_LIMIT_PARSE` | 歌单解析限流 | `30` |
+| `RATE_LIMIT_HLS_STREAM` | `stream.m3u8` 限流 | `60` |
+| `RATE_LIMIT_HLS_SEGMENT` | `.ts` 分片限流 | `600` |
+
+### HLS / FFmpeg
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `HLS_MAX_CONCURRENT_JOBS` | 最大并发转码任务数 | `2` |
+| `HLS_MAX_QUEUE` | 最大等待队列长度（超出返回 503） | `10` |
+| `HLS_DOWNLOAD_TIMEOUT` | 音频/封面下载超时（毫秒） | `60000` |
+| `HLS_DOWNLOAD_MAX_SIZE` | 下载最大字节数 | `104857600` |
+| `HLS_FFMPEG_TIMEOUT` | FFmpeg 超时（毫秒） | `180000` |
+| `HLS_FFMPEG_THREADS` | 单个 FFmpeg 进程线程数（0=自动；弱服务器建议 1~2） | `0` |
+| `HLS_SEGMENT_DURATION` | HLS 分片时长（秒） | `10` |
+| `HLS_AUTO_PRELOAD_COUNT` | 自动预加载前 N 首歌 | `1` |
+| `LOG_HLS_VERBOSE` | 输出详细 HLS 日志（`1/true` 开启） | `0` |
+| `PRELOAD_BASE_URL` | “生成链接”时后台预加载调用的 baseUrl（默认 `http://127.0.0.1:$PORT`） | - |
+
+### TS 分片缓存
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `HLS_CACHE_MAX_SIZE` | 缓存最大容量（字节，优先级高于 GB） | - |
+| `HLS_CACHE_MAX_SIZE_GB` | 缓存最大容量（GB） | `5` |
+| `HLS_CACHE_MAX_AGE_HOURS` | 缓存最大保留时间（小时） | `24` |
+| `HLS_CACHE_CLEANUP_INTERVAL_MINUTES` | 定时清理间隔（分钟） | `60` |
+| `HLS_CACHE_CLEANUP_TARGET_RATIO` | 超限清理到 `maxSize * ratio` 以下 | `0.8` |
+
+### 下载安全
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `HLS_DOWNLOAD_ALLOW_HOSTS` | 额外允许下载的 host 正则（逗号分隔） | - |
+
+### 音质
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `MUSIC_QUALITY` | `low/medium/high/lossless` | `low` |
+| `MUSIC_BITRATE` | 直接指定码率（bps，优先级低于 `MUSIC_QUALITY` 预设） | - |
+
+### 视频轻量随机背景图
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `LITE_VIDEO_BG_API_URL` | 视频轻量随机背景图 API（支持 302/JSON/纯文本 URL） | `https://api.miaomc.cn/image/get` |
+| `LITE_VIDEO_BG_API_TIMEOUT_MS` | 背景图 API 超时（毫秒） | `8000` |
+
+### 封面视频
+
+| 环境变量 | 说明 | 默认值 |
+|---|---|---|
+| `COVER_WIDTH` | 输出宽度 | `1920` |
+| `COVER_HEIGHT` | 输出高度 | `1080` |
+| `COVER_FPS` | 帧率（静态封面建议 1~5，可显著降压） | `5` |
+| `DEFAULT_COVER_URL` | 默认封面 URL | 内置默认值 |
+
+### Docker 构建参数（可选）
+
+当无法访问 Docker Hub 或需要加速构建时可用：
+
+| 参数 | 说明 | 示例 |
+|---|---|---|
+| `NODE_IMAGE` | 基础镜像 | `node:24-alpine` |
+| `ALPINE_REPO_MIRROR` | Alpine 仓库镜像（不带协议） | `mirrors.aliyun.com/alpine` |
+| `NPM_REGISTRY` | npm registry | `https://registry.npmmirror.com` |
+
+## License
+
+MIT
+
+## 友情链接
+[Linux.do](https://linux.do)

@@ -1,111 +1,45 @@
-<!-- Footer -->
-<footer>
-  <p>&copy; 2026-Now MusicForUrl. Powered by LittleSheep. <a href="https://github.com/znc15/MusicForUrl" target="_blank">GitHub</a></p>
-</footer>
-
-<!-- Modals and Overlays -->
 <div id="modalContainer">
-  <!-- Login Modal -->
-  <div class="modal-overlay" id="loginModal">
-    <div class="modal">
-      <div class="modal-title" id="loginModalTitle">登录</div>
-
-      <!-- 平台选择 -->
-      <div class="login-platform-tabs" id="loginPlatformTabs">
-        <button class="login-platform-tab active" id="loginPlatformNetease"
-                onclick="switchLoginPlatform('netease')">网易云音乐</button>
-        <button class="login-platform-tab" id="loginPlatformQQ"
-                onclick="switchLoginPlatform('qq')">QQ音乐</button>
+  <div class="modal-overlay" id="loginModal" aria-hidden="true">
+    <section class="modal glass" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle" tabindex="-1">
+      <button type="button" class="modal-close" onclick="hideLogin()" aria-label="关闭登录窗口"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+      <h2 class="modal-title" id="loginModalTitle">登录网易云音乐</h2>
+      <div class="login-platform-tabs" data-motion-tabs id="loginPlatformTabs" role="group" aria-label="登录平台">
+        <button type="button" class="login-platform-tab active" id="loginPlatformNetease" aria-pressed="true" onclick="switchLoginPlatform('netease')">网易云音乐</button>
+        <button type="button" class="login-platform-tab" id="loginPlatformQQ" aria-pressed="false" onclick="switchLoginPlatform('qq')">QQ 音乐</button>
       </div>
-
-      <!-- 网易云登录面板 -->
-      <div id="neteaseLoginPanel">
-      <div class="login-tabs">
-        <button class="login-tab active" onclick="switchLoginTab('qrcode')">扫码</button>
-        <button class="login-tab" onclick="switchLoginTab('captcha')">验证码</button>
-        <button class="login-tab" onclick="switchLoginTab('password')">密码</button>
-        <button class="login-tab" onclick="switchLoginTab('cookie')">Cookie</button>
-      </div>
-
-      <!-- QR Code -->
-      <div class="login-content active" id="qrcodeContent">
-        <div class="qr-code">
-          <img id="qrCodeImg" src="/placeholder.svg" alt="二维码" referrerpolicy="no-referrer">
-          <div class="qr-status" id="qrStatus">请使用APP扫码</div>
+      <div class="motion-panels">
+      <div id="neteaseLoginPanel" class="login-platform-panel active">
+        <div class="login-tabs" data-motion-tabs role="group" aria-label="网易云登录方式">
+          <button type="button" class="login-tab active" aria-pressed="true" onclick="switchLoginTab('qrcode')">扫码</button>
+          <button type="button" class="login-tab" aria-pressed="false" onclick="switchLoginTab('captcha')">验证码</button>
+          <button type="button" class="login-tab" aria-pressed="false" onclick="switchLoginTab('password')">密码</button>
+          <button type="button" class="login-tab" aria-pressed="false" onclick="switchLoginTab('cookie')">Cookie</button>
+        </div>
+        <div class="motion-panels">
+        <div class="login-content active" id="qrcodeContent">
+          <div class="qr-code"><img id="qrCodeImg" src="/placeholder.svg" alt="网易云音乐登录二维码" referrerpolicy="no-referrer"></div>
+          <div class="qr-status" id="qrStatus" role="status" aria-live="polite">网易云音乐 App 扫码</div>
+          <button type="button" class="text-button qr-refresh" onclick="loadQRCode()">刷新二维码</button>
+        </div>
+        <div class="login-content" id="captchaContent">
+          <div class="form-group"><label for="captchaPhone">手机号</label><input type="tel" id="captchaPhone" placeholder="手机号" autocomplete="tel"></div>
+          <div class="form-group"><label for="captchaCode">验证码</label><div class="captcha-group"><input type="text" id="captchaCode" placeholder="验证码" inputmode="numeric" autocomplete="one-time-code"><button type="button" class="btn btn-ghost" id="sendCaptchaBtn" onclick="sendCaptcha()">发送</button></div></div>
+          <button type="button" class="btn btn-primary full-width" onclick="loginWithCaptcha()">登录</button>
+        </div>
+        <div class="login-content" id="passwordContent">
+          <div class="form-group"><label for="passwordPhone">手机号</label><input type="tel" id="passwordPhone" placeholder="手机号" autocomplete="username"></div>
+          <div class="form-group"><label for="passwordInput">密码</label><input type="password" id="passwordInput" placeholder="密码" autocomplete="current-password"></div>
+          <button type="button" class="btn btn-primary full-width" onclick="loginWithPassword()">登录</button>
+        </div>
+        <div class="login-content" id="cookieContent">
+          <div class="form-group"><label for="cookieInput">Cookie</label><textarea id="cookieInput" placeholder="粘贴 Cookie" rows="4" spellcheck="false" autocomplete="off"></textarea></div>
+          <button type="button" class="btn btn-primary full-width" onclick="loginWithCookie()">登录</button>
+        </div>
         </div>
       </div>
-
-      <!-- Captcha -->
-      <div class="login-content" id="captchaContent">
-        <div class="form-group">
-          <label>手机号</label>
-          <input type="tel" id="captchaPhone" placeholder="输入手机号">
-        </div>
-        <div class="form-group">
-          <label>验证码</label>
-          <div class="captcha-group">
-            <input type="text" id="captchaCode" placeholder="输入验证码">
-            <button class="btn btn-ghost" id="sendCaptchaBtn" onclick="sendCaptcha()">发送</button>
-          </div>
-        </div>
-        <button class="btn btn-primary" style="width: 100%;" onclick="loginWithCaptcha()">登录</button>
+      <div id="qqLoginPanel" class="login-platform-panel"><div class="login-content active" id="qqQrcodeContent"><div class="qr-code"><img id="qqQrCodeImg" src="/placeholder.svg" alt="QQ 音乐登录二维码" referrerpolicy="no-referrer"></div><div class="qr-status" id="qqQrStatus" role="status" aria-live="polite">QQ 扫码</div><button type="button" class="text-button qr-refresh" onclick="loadQQQRCode()">刷新二维码</button></div></div>
       </div>
-
-      <!-- Password -->
-      <div class="login-content" id="passwordContent">
-        <div class="form-group">
-          <label>手机号</label>
-          <input type="tel" id="passwordPhone" placeholder="输入手机号">
-        </div>
-        <div class="form-group">
-          <label>密码</label>
-          <input type="password" id="passwordInput" placeholder="输入密码">
-        </div>
-        <button class="btn btn-primary" style="width: 100%;" onclick="loginWithPassword()">登录</button>
-      </div>
-
-      <!-- Cookie -->
-      <div class="login-content" id="cookieContent">
-        <div class="form-group">
-          <label>Cookie</label>
-          <textarea id="cookieInput" placeholder="粘贴Cookie"></textarea>
-        </div>
-        <button class="btn btn-primary" style="width: 100%;" onclick="loginWithCookie()">登录</button>
-      </div>
-      </div><!-- /neteaseLoginPanel -->
-
-      <!-- QQ音乐登录面板 -->
-      <div id="qqLoginPanel" style="display: none;">
-        <div class="login-content active" id="qqQrcodeContent">
-          <div class="qr-code">
-            <img id="qqQrCodeImg" src="/placeholder.svg" alt="QQ音乐二维码" referrerpolicy="no-referrer">
-            <div class="qr-status" id="qqQrStatus">请使用QQ扫码</div>
-          </div>
-        </div>
-      </div><!-- /qqLoginPanel -->
-
-      <div class="modal-actions">
-        <button class="btn btn-ghost" onclick="hideLogin()">取消</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- About Modal -->
-  <div class="modal-overlay" id="aboutModal">
-    <div class="modal">
-      <div class="modal-title">关于 MusicForUrl</div>
-      <div class="about-content">
-        <p>一个简单、纯净的工具，用于将网易云音乐/QQ音乐歌单转换为 VRChat 可播放的链接。</p>
-        <p><strong>功能特点：</strong></p>
-        <p>• 支持网易云音乐和QQ音乐双平台<br>• 解析歌单并生成 m3u8 链接<br>• 支持账号登录与收藏夹同步<br>• 自动记录最近播放历史</p>
-        <p>项目开源于 GitHub。</p>
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-primary" style="width: 100%;" onclick="hideAbout()">关闭</button>
-      </div>
-    </div>
+    </section>
   </div>
 </div>
-
-<!-- Toast Notification -->
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>

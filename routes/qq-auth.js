@@ -222,6 +222,7 @@ router.get('/status', async (req, res) => {
     data: {
       logged: true,
       user: {
+        userId: user.qq_uin,
         nickname: user.nickname,
         avatar: resolveQQAvatar(user.avatar, user.qq_uin),
         vipType: user.vip_type

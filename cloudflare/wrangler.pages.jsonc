@@ -1,0 +1,12 @@
+{
+  "name": "music-for-url-pages",
+  "pages_build_output_dir": "../public",
+  "compatibility_date": "2026-10-03",
+  "vars": { "AUDIO_CACHE_ENABLED": "false" },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "music-for-url", "database_id": "replace-with-your-d1-id" }
+  ],
+  "r2_buckets": [
+    { "binding": "AUDIO_CACHE", "bucket_name": "music-for-url-private-cache" }
+  ]
+}

@@ -1,261 +1,196 @@
 # MusicForUrl
 
-将音乐歌单转换为可在视频播放器中播放的 M3U8 链接，支持多用户登录、VIP 歌曲播放。
+将网易云音乐、QQ 音乐歌单转换为轻量音频 M3U8 播放链接，提供账号管理、音乐收藏和媒体预览。
 
-服务器进行加密存储Cookie，防止用户信息泄露。
+支持 **Cloudflare Workers Static Assets + D1 + 可选私有 R2**，以及 **自有 Node.js / Docker + SQLite** 两种部署。两种环境共用播放器、音质策略与媒体代理；Cloudflare 代码位于 `codex/cloudflare-serverless` 分支，自有服务器说明见 [README.node-docker.md](README.node-docker.md)。
 
-生成链接时提供三种输出：
-- **轻量 M3U8（直链列表，优先推荐）**：几乎不转码/不落盘，服务器压力更小；大部分 VRChat 播放器可用，但不会显示视频画面（仅音频），兼容性仍取决于播放器实现。
-- **视频轻量 M3U8（随机背景图）**：基于轻量直链输出音频清单，并附带统一背景图元数据；同一播放链接固定同一张图，图片 API 异常会自动回退歌单封面。
-- **HLS（转码分片）**：兼容性更稳，但会消耗较多 CPU/磁盘（需要 FFmpeg）；当轻量模式无法播放时再切换。
+**在线使用：[music.nyasakura.com](https://music.nyasakura.com/)**
 
-说明：视频轻量是否显示背景图，取决于播放器或上层系统是否识别自定义元数据标签/参数。
+**官网与文档：[znc15.github.io/MusicForUrl](https://znc15.github.io/MusicForUrl/)**（仅 GitHub Pages，仓库文档随 CI 构建同步）。
 
-## 快速开始
+![MusicForUrl 天蓝色玻璃工作台与媒体预览](.github/assets/workspace-preview.jpg)
 
-### 本地运行
+## 功能与导航
 
-```bash
-npm install
-cp env.example .env
-# 生产环境必须设置 ENCRYPTION_KEY
-npm start
+| 入口 | 功能 |
+| --- | --- |
+| 链接生成 | 解析网易云 / QQ 音乐歌单，生成签名 M3U8 链接、复制链接并进入预览 |
+| 我的音乐 | 浏览用户歌单、收藏和最近播放，支持平台切换与分页 |
+| 视频预览 | 本站歌单逐首播放、音质切换、上一首 / 下一首、封面与队列；也可打开 HTTPS 直链或本地视频 / 音频 |
+| 账号管理 | 查看两个平台的账号状态、账号 ID 与会员信息，选择常用平台、重新登录切换账号、退出登录，保存本机名称和备注 |
+| 关于 | 查看项目介绍、构建版本、动画与播放库版本，以及项目和反馈入口 |
+
+- 网易云支持扫码、手机验证码、密码和 Cookie 登录；QQ 音乐提供扫码登录。
+- 每个平台保留一个当前登录账号。账号名称和备注按“平台 + 账号 ID”存储在当前浏览器，不修改音乐平台昵称，也不跨设备同步。
+- 收藏、最近播放和服务端账号信息存入 D1；平台 Cookie 使用 AES-GCM 加密。
+- 界面采用左侧导航与右侧内容区，主色为天蓝与白色，使用半透明玻璃容器；窄屏显示紧凑导航。
+- 页面、Tab 滑块、列表、弹窗、按钮与亮暗主题切换统一使用 **GSAP**，主题变色 360ms，支持系统的“减少动态效果”设置。实现位置与参数见[动画说明](cloudflare/ANIMATION.md)。
+
+## 音质、封面与性能
+
+本站歌单采用逐首原生音频预览，使用 Range、短期音源缓存及下一首元数据预取；封面与音源解析并行，独立图片层不会被控制栏覆盖。
+
+| 档位 | 格式 | 请求与限制 |
+| --- | --- | --- |
+| 标准 | MP3 | 网易云 / QQ 通常 128 kbps |
+| 较高 | MP3 | 网易云 192 kbps；QQ 对应 M800，通常 320 kbps |
+| 高品质 | MP3 | 通常 320 kbps，取决于平台实际返回 |
+| 无损 | FLAC | 自有服务器可用，需账号权限和浏览器支持；Cloudflare 禁用，旧配置映射高品质 MP3 |
+
+播放器显示实际格式与码率。所选档位不可用时向下尝试；高音质只有试听时优先选较低档位的完整音源。只有试听则明确提示，全部不可用提示检查登录态、VIP、单独购买或地区版权。浏览器无法解码 FLAC 时尝试高品质 MP3。切换音质保留进度和播放状态。
+
+Cloudflare 绑定 `AUDIO_CACHE` 私有 R2 桶并设置 `AUDIO_CACHE_ENABLED=true`；每次读取先检查鉴权、歌单归属和当前音源。音频按账号、会话、歌曲、实际音质与试听状态隔离，逻辑有效 1 小时，封面 24 小时。生命周期分别 1 天 / 2 天；完整音频超过 16 MiB 或缓存故障继续代理，首次 Range 填充可能额外回源。
+
+Node 同一开关启用最多 256 MiB 的私有磁盘缓存，可配置 `PLAYER_CACHE_DIR`。R2 命中不等于 CDN 边缘命中，不保证所有线路提速。详见[播放性能](website/guide/performance.md)、[R2 / Workers / Pages / Stream / CDN / Navidrome 选型](website/guide/architecture.md)、[两种部署方式](website/guide/deployment.md)与[官网 CI](website/guide/website.md)。
+
+## 使用方式
+
+1. 在“账号管理”或侧边栏底部登录音乐账号。
+2. 在“链接生成”选择平台，输入歌单链接或 ID；也可以从“我的音乐”直接生成。
+3. 复制生成的 M3U8 链接，或点击预览入口在本站播放。
+4. “视频预览”也支持手动输入 HTTPS 媒体直链和选择本地文件。
+
+本地文件仅通过浏览器 Object URL 预览，不上传到服务器。M3U8 优先使用本站打包的 Hls.js；不支持 MediaSource 的浏览器尝试原生 HLS。外部 HLS 源必须允许跨域请求。
+
+最近播放按有效媒体请求记录：HLS 分片完整传输后计入，直链模式在返回播放地址后计入；不代表已经完整收听。相同账号、歌单和歌曲在 5 分钟内合并，每个账号每分钟最多新增 12 条，保留最近 30 天且最多 1,000 条。后台每天清理过期数据，详见[播放历史说明](cloudflare/README.md#播放历史与保留)。
+
+## 播放与兼容性
+
+Cloudflare 版本输出 **MP3 Packed Audio M3U8**：Worker 为音频添加 ID3 时间戳，并通过本站域名流式提供。每首歌作为一个完整片段，相邻歌曲使用 `EXT-X-DISCONTINUITY`；不进行 FFmpeg 转码，也不生成视频画面。实现细节见 [Cloudflare 文档](cloudflare/README.md#功能边界)与 [RFC 8216 第 3.4 节](https://www.rfc-editor.org/rfc/rfc8216.html#section-3.4)。
+
+| 项目 | 当前边界 |
+| --- | --- |
+| 播放链接有效期 | 默认 24 小时，可配置至最多 48 小时；退出对应账号会撤销已生成链接 |
+| 会员歌曲 | 取决于登录账号的权限、曲目可用性和音乐平台返回结果 |
+| 视频输出 | Cloudflare 版不提供封面视频、随机背景视频、MP4 输出或 FFmpeg HLS 视频转码；预览页可播放已有视频直链 |
+| 流量 | 音频经过 Worker；使用前应评估 Cloudflare 与上游平台的配额和限制 |
+| VRChat | 浏览器播放成功不代表所有世界播放器可播放；还取决于播放器后端、允许域名和房间规则 |
+
+VRChat 公开 / 群组公开房间需要世界作者将媒体域名加入 `Video Player Allowed Domains`，观众启用 `Allow Untrusted URLs`。将链接放入第三方播放器的 `?url=` 参数，不能保证该站支持转发或房间允许最终媒体域名。请参阅 [VRChat 官方规则](https://creators.vrchat.com/worlds/udon/video-players/www-whitelist/)。
+
+## 本地开发
+
+需要 **Node.js 24+**、npm 和 Git。以下示例使用 PowerShell：
+
+```powershell
+git clone --branch codex/cloudflare-serverless https://github.com/znc15/MusicForUrl.git
+cd MusicForUrl/cloudflare
+npm ci
+Copy-Item .dev.vars.example .dev.vars
 ```
 
-默认端口 `3000`，可通过 `PORT` 修改。
+将 `.dev.vars` 中的 `ENCRYPTION_KEY` 替换为独立的至少 32 字符随机密钥，占位值会被拒绝。可以用下面的命令生成一个 64 字符十六进制密钥，再填入文件：
 
-### Docker 部署
-
-#### 前置条件
-
-- [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)（Docker Desktop 已包含）
-- 系统需安装 FFmpeg（Docker 镜像内已包含，无需额外安装）
-
-#### 1. 准备配置
-
-复制 compose 文件并修改加密密钥：
-
-```bash
-# 编辑 docker-compose.yml，将 ENCRYPTION_KEY 改为你自己的密钥（至少 16 位，建议 32 位）
-# 纯数字务必加引号，例如 "1234567890123456"
-vim deploy/docker-compose.yml
+```powershell
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+npm run db:local
+npm run dev
 ```
 
-#### 2. 构建并启动
+按终端显示的本地地址访问。Wrangler 默认使用本地 D1 数据库；`npm run dev` 会先自动构建浏览器依赖和版本信息。
 
-**基础部署**（适用于大多数 VPS）：
+在另一个终端的 `cloudflare/` 目录运行回归测试：
 
-```bash
-docker compose -f deploy/docker-compose.yml up -d --build
+```powershell
+npm test
 ```
 
-**按机器规格选择**（需要资源限制生效时加 `--compatibility`）：
+测试覆盖 Worker 认证与账号隔离、流式请求体限制、双平台 MP3 音质、播放记录去重与保留、Packed Audio，以及工作台 URL 校验和账号偏好。
 
-| 规格 | 适用场景 | 命令 |
-|---|---|---|
-| 1C1G | 最低配置 VPS、个人使用 | `docker compose -f deploy/docker-compose.1c1g.yml --compatibility up -d --build` |
-| 2C4G | 轻度多人使用 | `docker compose -f deploy/docker-compose.2c4g.yml --compatibility up -d --build` |
-| 4C4G | 多人使用、频繁转码 | `docker compose -f deploy/docker-compose.4c4g.yml --compatibility up -d --build` |
-| 8C8G | 高并发、大量用户 | `docker compose -f deploy/docker-compose.8c8g.yml --compatibility up -d --build` |
+## 部署到 Cloudflare
 
-> 各规格的详细参数差异见下方 [规格对照表](#docker-规格对照表)。
+此版本使用 **Workers Static Assets + Worker API + D1**，部署命令为 Wrangler；不能直接当作纯静态 Pages 项目上传。静态资源与 API 随同一个 Worker 发布，参考 [Cloudflare Static Assets 文档](https://developers.cloudflare.com/workers/static-assets/)。
 
-#### 3. 国内网络加速构建
+以下步骤均在 `cloudflare/` 目录执行。
 
-如果构建时下载依赖慢，可使用国内镜像：
+### 1. 登录并创建数据库
 
-```bash
-docker compose -f deploy/docker-compose.yml build \
-  --build-arg ALPINE_REPO_MIRROR=mirrors.aliyun.com/alpine \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+```powershell
+npm ci
+npx wrangler login
+npx wrangler d1 create music-for-url
 ```
 
-或通过环境变量传入：
+编辑 [cloudflare/wrangler.jsonc](cloudflare/wrangler.jsonc)：
 
-```bash
-ALPINE_REPO_MIRROR=mirrors.aliyun.com/alpine \
-NPM_REGISTRY=https://registry.npmmirror.com \
-docker compose -f deploy/docker-compose.yml up -d --build
+- 将 `d1_databases[0].database_id` 替换为刚创建的 D1 ID，保留 `binding: "DB"`。
+- **删除现有 `routes`，或替换为你自己的域名。仓库中的 `nyasakura.com` 路由属于在线站点。**
+- 保留 `workers_dev: true`，首次部署可直接使用 Cloudflare 分配的 `workers.dev` 地址。
+- 若修改 `database_name`，需要同步修改 `package.json` 中两个 `db:*` 命令使用的数据库名称。
+
+然后初始化远端表：
+
+```powershell
+npm run db:remote
 ```
 
-#### 4. 数据持久化
+### 2. 配置密钥并首次发布
 
-默认使用 Docker named volume，数据在容器重建后不会丢失：
-
-```bash
-# 查看 volume 位置
-docker volume ls | grep music
+```powershell
+Copy-Item .dev.vars.example .dev.vars.production
 ```
 
-**Linux 如需落盘到宿主机目录**，编辑 compose 文件，将 volumes 改为：
+把 `.dev.vars.production` 中的 `ENCRYPTION_KEY` 换成独立生成的生产密钥，安全备份后执行：
 
-```yaml
-volumes:
-  - ../data:/app/data
+```powershell
+npm run build:assets
+npx wrangler deploy --secrets-file .dev.vars.production
 ```
 
-#### 5. 常用管理命令
+`.dev.vars`、`.dev.vars.production`、Wrangler 本地状态和运行数据均被 Git 忽略。不要提交真实 Cookie、登录令牌或生产密钥；丢失或直接更换加密密钥会使已有账号数据无法解密。
 
-```bash
-# 查看日志
-docker compose -f deploy/docker-compose.yml logs -f
+后续更新使用：
 
-# 重启服务
-docker compose -f deploy/docker-compose.yml restart
-
-# 停止服务
-docker compose -f deploy/docker-compose.yml down
-
-# 停止并删除数据（谨慎）
-docker compose -f deploy/docker-compose.yml down -v
-
-# 重新构建（代码更新后）
-docker compose -f deploy/docker-compose.yml up -d --build
+```powershell
+npm run deploy
 ```
 
-#### 6. 反向代理配置
+该命令自动构建静态依赖，并保留已有 Secret。部署后检查 `/api/health`，再验证登录、生成链接和预览播放。
 
-以 Nginx 为例：
+升级先备份 D1，执行 `npm run db:remote` 添加索引和 `song_sources`，再执行 `npm run deploy`。脚本可重复执行，不清空账号或收藏。Cron 每天 UTC 03:17 清理过期记录与音源元数据。新账号还需创建 R2 桶并修改绑定；不启用时删除绑定并设 `AUDIO_CACHE_ENABLED=false`，参阅 [Cloudflare 文档](cloudflare/README.md#私有-r2-缓存)。
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name music.example.com;
+### 3. 可选配置与自定义域名
 
-    # SSL 配置省略...
+| 配置 | 用途 | 默认值 |
+| --- | --- | --- |
+| `ENCRYPTION_KEY` | 账号加密与令牌签名；必须设为 Secret | 必填，至少 32 字符 |
+| `TOKEN_TTL_HOURS` | 登录令牌有效期 | 168 小时 |
+| `PLAYBACK_TOKEN_TTL_SECONDS` | 播放链接有效期 | 86400 秒，上限 172800 秒 |
+| `CACHE_TTL` | 歌单缓存有效期 | 86400 秒 |
+| `MUSIC_QUALITY` | `low / medium / high` MP3 音质选择 | `low`；旧配置 `lossless` 自动使用 `high`，实际结果受账号与上游接口限制 |
 
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
+自定义域名可配置为 Worker Custom Domain 或 Worker Route。当前在线站点的 Cloudflare for SaaS、DNS 优选和回退配置见[站点部署记录](cloudflare/README.md#域名证书和优选入口)，这些记录仅供参考；优选目标的可用性和访问效果会随网络变化。
+
+## 项目结构
+
+```text
+cloudflare/
+  src/                 Worker API、网易云适配、认证和音频流处理
+  schema.sql           D1 表结构
+  scripts/             同步 GSAP、Hls.js 与构建版本信息
+  tests/               Cloudflare 版本回归测试
+  wrangler.jsonc       Worker、静态资源、D1 与域名配置
+public/
+  views/               链接生成、音乐、预览、账号、关于页面
+  includes/            侧边栏、登录弹窗等公共模板
+  js/main.js           路由与音乐业务
+  js/workspace.js      导航、账号偏好与媒体预览
+  js/motion.js         统一 GSAP 动画
+  js/vendor/           本站托管的浏览器依赖
+lib/qqmusic.js          QQ 音乐适配
+server.js / routes/     保留的 Node.js 服务端
+deploy/                保留的 Docker 部署文件
 ```
 
-对应 compose 环境变量需添加：
+旧版 SQLite 数据不会自动迁移到 D1，需要重新登录；收藏和最近播放从新数据库开始。平台接口可能随上游更新或风控变化而失效。
 
-```yaml
-environment:
-  TRUST_PROXY: 1          # 单层反向代理
-  BASE_URL: https://music.example.com
-```
+## 文档与反馈
 
-#### Docker 规格对照表
-
-| 参数 | 1C1G | 2C4G | 4C4G | 8C8G |
-|---|---|---|---|---|
-| Node 堆内存 | 256MB | 512MB | 1024MB | 2048MB |
-| FFmpeg 并发任务 | 1 | 1 | 2 | 4 |
-| FFmpeg 线程数 | 1 | 1 | 1 | 2 |
-| 等待队列 | 3 | 5 | 10 | 20 |
-| 封面分辨率 | 854x480 | 1280x720 | 1280x720 | 1920x1080 |
-| 封面帧率 | 1 | 2 | 5 | 10 |
-| 缓存容量 | 1GB | 2GB | 8GB | 20GB |
-| 预加载 | 关闭 | 关闭 | 1 首 | 2 首 |
-
-## 配置
-
-完整可复制模板见 `env.example`。下面只列出项目实际使用到的主要配置项。
-
-### 基础
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `PORT` | 服务端口 | `3000` |
-| `NODE_ENV` | 环境标识 | `development` |
-| `ENCRYPTION_KEY` | Cookie 加密密钥（生产环境必填，建议 32 位字符串） | - |
-| `SITE_PASSWORD` | 站点访问密码（可选） | - |
-| `ADMIN_PASSWORD` | 管理接口密码（可选，用于 `/api/hls/cache/*`） | - |
-| `HLS_ADMIN_ENABLED` | 是否启用 HLS 管理接口（`1/true` 开启；默认关闭；需同时设置 `ADMIN_PASSWORD`） | - |
-| `CACHE_TTL` | 歌单缓存时间（秒） | `86400` |
-| `TOKEN_TTL_HOURS` | 登录 token 有效期（小时） | `168` |
-
-### 反向代理
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `BASE_URL` | 公网访问地址（用于生成 m3u8 中的 URL） | - |
-| `TRUST_PROXY` | 信任的代理层数或 IP/子网（不要设为 `true`） | `loopback` |
-
-### 限流（每分钟）
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `RATE_LIMIT_GLOBAL` | 全局 API 限流 | `200` |
-| `RATE_LIMIT_AUTH` | 认证接口限流 | `10` |
-| `RATE_LIMIT_PARSE` | 歌单解析限流 | `30` |
-| `RATE_LIMIT_HLS_STREAM` | `stream.m3u8` 限流 | `60` |
-| `RATE_LIMIT_HLS_SEGMENT` | `.ts` 分片限流 | `600` |
-
-### HLS / FFmpeg
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `HLS_MAX_CONCURRENT_JOBS` | 最大并发转码任务数 | `2` |
-| `HLS_MAX_QUEUE` | 最大等待队列长度（超出返回 503） | `10` |
-| `HLS_DOWNLOAD_TIMEOUT` | 音频/封面下载超时（毫秒） | `60000` |
-| `HLS_DOWNLOAD_MAX_SIZE` | 下载最大字节数 | `104857600` |
-| `HLS_FFMPEG_TIMEOUT` | FFmpeg 超时（毫秒） | `180000` |
-| `HLS_FFMPEG_THREADS` | 单个 FFmpeg 进程线程数（0=自动；弱服务器建议 1~2） | `0` |
-| `HLS_SEGMENT_DURATION` | HLS 分片时长（秒） | `10` |
-| `HLS_AUTO_PRELOAD_COUNT` | 自动预加载前 N 首歌 | `1` |
-| `LOG_HLS_VERBOSE` | 输出详细 HLS 日志（`1/true` 开启） | `0` |
-| `PRELOAD_BASE_URL` | “生成链接”时后台预加载调用的 baseUrl（默认 `http://127.0.0.1:$PORT`） | - |
-
-### TS 分片缓存
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `HLS_CACHE_MAX_SIZE` | 缓存最大容量（字节，优先级高于 GB） | - |
-| `HLS_CACHE_MAX_SIZE_GB` | 缓存最大容量（GB） | `5` |
-| `HLS_CACHE_MAX_AGE_HOURS` | 缓存最大保留时间（小时） | `24` |
-| `HLS_CACHE_CLEANUP_INTERVAL_MINUTES` | 定时清理间隔（分钟） | `60` |
-| `HLS_CACHE_CLEANUP_TARGET_RATIO` | 超限清理到 `maxSize * ratio` 以下 | `0.8` |
-
-### 下载安全
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `HLS_DOWNLOAD_ALLOW_HOSTS` | 额外允许下载的 host 正则（逗号分隔） | - |
-
-### 音质
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `MUSIC_QUALITY` | `low/medium/high/lossless` | `low` |
-| `MUSIC_BITRATE` | 直接指定码率（bps，优先级低于 `MUSIC_QUALITY` 预设） | - |
-
-### 视频轻量随机背景图
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `LITE_VIDEO_BG_API_URL` | 视频轻量随机背景图 API（支持 302/JSON/纯文本 URL） | `https://api.miaomc.cn/image/get` |
-| `LITE_VIDEO_BG_API_TIMEOUT_MS` | 背景图 API 超时（毫秒） | `8000` |
-
-### 封面视频
-
-| 环境变量 | 说明 | 默认值 |
-|---|---|---|
-| `COVER_WIDTH` | 输出宽度 | `1920` |
-| `COVER_HEIGHT` | 输出高度 | `1080` |
-| `COVER_FPS` | 帧率（静态封面建议 1~5，可显著降压） | `5` | 
-| `DEFAULT_COVER_URL` | 默认封面 URL | 内置默认值 |
-
-### Docker 构建参数（可选）
-
-当无法访问 Docker Hub 或需要加速构建时可用：
-
-| 参数 | 说明 | 示例 |
-|---|---|---|
-| `NODE_IMAGE` | 基础镜像 | `node:20-alpine` |
-| `ALPINE_REPO_MIRROR` | Alpine 仓库镜像（不带协议） | `mirrors.aliyun.com/alpine` |
-| `NPM_REGISTRY` | npm registry | `https://registry.npmmirror.com` |
+- [Cloudflare 实现与站点部署记录](cloudflare/README.md)
+- [动画实现、时长与复用示例](cloudflare/ANIMATION.md)
+- [Node.js / Docker 旧版部署说明](README.node-docker.md)
+- [问题反馈](https://github.com/znc15/MusicForUrl/issues)
 
 ## License
 
-MIT
-
-## 友情链接
-[Linux.do](https://linux.do)
+项目代码采用 [MIT License](LICENSE)。第三方库遵循各自许可，仓库保留其许可声明。

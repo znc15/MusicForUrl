@@ -38,8 +38,7 @@ lerna-debug.log*
 # TypeScript
 *.tsbuildinfo
 
-# Optional: lock files (uncomment if needed)
-package-lock.json
+# Keep package-lock.json for reproducible Docker installs.
 yarn.lock
 pnpm-lock.yaml
 
@@ -243,7 +242,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
 

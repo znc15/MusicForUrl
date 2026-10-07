@@ -160,6 +160,7 @@ if (process.env.SITE_PASSWORD) {
     if (req.path.startsWith('/api/song/')) {
       return next();
     }
+    if (/^\/api\/player\/(media|cover)\//.test(req.path)) return true;
     if (req.path.startsWith('/api/hls/') && !req.path.startsWith('/api/hls/cache')) {
       return next();
     }
@@ -209,6 +210,9 @@ if (process.env.SITE_PASSWORD) {
 }
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/api/player', require('./routes/player'));
+app.use('/api/history', require('./lib/player-node').history('netease'));
+app.use('/api/qq/history', require('./lib/player-node').history('qq'));
 
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/captcha', authLimiter);
@@ -242,7 +246,7 @@ app.use('/api', (req, res) => {
   });
 });
 
-app.get('*', (req, res) => {
+app.get('/{*splat}', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

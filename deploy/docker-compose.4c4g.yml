@@ -4,7 +4,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
       args:
-        NODE_IMAGE: ${NODE_IMAGE:-node:20-alpine}
+        NODE_IMAGE: ${NODE_IMAGE:-node:24-alpine}
         ALPINE_REPO_MIRROR: ${ALPINE_REPO_MIRROR:-}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
     container_name: music-for-url-4c4g

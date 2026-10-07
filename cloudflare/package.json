@@ -1,0 +1,28 @@
+{
+  "name": "music-for-url-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:assets": "node scripts/sync-motion.mjs",
+    "predev": "npm run build:assets",
+    "dev": "wrangler dev",
+    "predeploy": "npm run build:assets",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute music-for-url --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute music-for-url --remote --file=./schema.sql",
+    "test": "node --test tests/worker.test.js tests/netease.test.js tests/packed-audio.test.js tests/workspace.test.js"
+  },
+  "dependencies": {
+    "crypto-js": "4.2.0",
+    "node-forge": "1.4.0",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "gsap": "3.15.0",
+    "hls.js": "1.7.3",
+    "wrangler": "4.147.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

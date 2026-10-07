@@ -1,0 +1,54 @@
+name: Project website
+on:
+  push:
+    branches: [master, codex/cloudflare-serverless]
+    paths:
+      - website/**
+      - README.md
+      - README.node-docker.md
+      - cloudflare/README.md
+      - cloudflare/ANIMATION.md
+      - public/brand.svg
+      - .github/assets/**
+      - .github/workflows/website.yml
+  pull_request:
+    paths: [website/**, README.md, README.node-docker.md, cloudflare/README.md, cloudflare/ANIMATION.md]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: project-website
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
+      - run: npm ci
+        working-directory: website
+      - run: npm run build
+        working-directory: website
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/.vitepress/dist
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

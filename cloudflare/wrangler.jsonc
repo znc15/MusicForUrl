@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "music-for-url",
+  "main": "./src/index.js",
+  "compatibility_date": "2026-10-03",
+  "workers_dev": true,
+  "vars": {
+    "AUDIO_CACHE_ENABLED": "true"
+  },
+  "r2_buckets": [
+    { "binding": "AUDIO_CACHE", "bucket_name": "music-for-url-private-cache" }
+  ],
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "routes": [
+    {
+      "pattern": "nyasakura.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "music.nyasakura.com/*",
+      "zone_name": "nyasakura.com"
+    }
+  ],
+  "placement": {
+    "mode": "smart"
+  },
+  "assets": {
+    "directory": "../public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "music-for-url",
+      "database_id": "498116b9-100f-439e-9188-f8a036047cdd"
+    }
+  ]
+}

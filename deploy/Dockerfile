@@ -1,5 +1,5 @@
 # ── 阶段 1：构建依赖 ──────────────────────────────────────
-ARG NODE_IMAGE=node:20-alpine
+ARG NODE_IMAGE=node:24-alpine
 FROM ${NODE_IMAGE} AS builder
 
 ARG ALPINE_REPO_MIRROR=
@@ -23,7 +23,7 @@ COPY package*.json ./
 
 # 安装依赖（npm 镜像可选）
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
-  && npm install --production
+  && npm ci --omit=dev
 
 # ── 阶段 2：运行时 ────────────────────────────────────────
 FROM ${NODE_IMAGE}

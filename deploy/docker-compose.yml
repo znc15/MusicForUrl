@@ -5,7 +5,7 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         # 可选：基础镜像（用于无法访问 Docker Hub 时切换到可用镜像源）
-        NODE_IMAGE: ${NODE_IMAGE:-node:20-alpine}
+        NODE_IMAGE: ${NODE_IMAGE:-node:24-alpine}
         # 可选：Alpine 仓库镜像（不带协议），例如 mirrors.aliyun.com/alpine
         ALPINE_REPO_MIRROR: ${ALPINE_REPO_MIRROR:-}
         # 可选：npm 镜像，例如 https://registry.npmmirror.com
