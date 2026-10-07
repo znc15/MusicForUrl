@@ -20,7 +20,7 @@ function r2Storage(bucket) {
       headers.set('etag', object.httpEtag);
       headers.set('accept-ranges', 'bytes');
       let status = 200;
-      if (object.range) {
+      if (range && object.range) {
         const offset = object.range.offset || 0;
         const length = object.range.length || object.size - offset;
         headers.set('content-length', String(length));

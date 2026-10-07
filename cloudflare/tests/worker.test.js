@@ -76,7 +76,7 @@ test('new Worker player authorizes before R2, supports ranges, isolates accounts
       const offset = match ? Number(match[1]) : 0;
       const length = match ? Number(match[2]) - offset + 1 : item.bytes.length;
       return { size: item.bytes.length, body: item.bytes.slice(offset, offset + length),
-        range: match ? { offset, length } : undefined, httpEtag: '"fixture"',
+        range: { offset, length }, httpEtag: '"fixture"',
         customMetadata: item.meta.customMetadata,
         writeHttpMetadata(headers) { headers.set('content-type', item.meta.httpMetadata.contentType); } };
     },
@@ -109,6 +109,9 @@ test('new Worker player authorizes before R2, supports ranges, isolates accounts
   const cold = await worker.fetch(new Request(source.data.mediaUrl), env, ctx);
   assert.equal(cold.headers.get('x-mfu-cache'), 'MISS'); assert.equal(await cold.text(), '0123456789');
   await Promise.all(pending); assert.equal(objects.size, 1);
+  const fullHit = await worker.fetch(new Request(source.data.mediaUrl), env, ctx);
+  assert.equal(fullHit.status, 200); assert.equal(fullHit.headers.get('content-range'), null);
+  assert.equal(await fullHit.text(), '0123456789');
   const warm = await worker.fetch(new Request(source.data.mediaUrl, { headers: { range: 'bytes=2-5' } }), env, ctx);
   assert.equal(warm.status, 206); assert.equal(warm.headers.get('content-range'), 'bytes 2-5/10');
   assert.equal(warm.headers.get('x-mfu-cache'), 'HIT'); assert.equal(await warm.text(), '2345'); assert.equal(originReads, 1);
