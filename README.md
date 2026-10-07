@@ -2,7 +2,7 @@
 
 将网易云音乐、QQ 音乐歌单转换为轻量音频 M3U8 播放链接，提供账号管理、音乐收藏和媒体预览。
 
-支持 **Cloudflare Workers Static Assets + D1 + 可选私有 R2**，以及 **自有 Node.js / Docker + SQLite** 两种部署。两种环境共用播放器、音质策略与媒体代理；Cloudflare 代码位于 `codex/cloudflare-serverless` 分支，自有服务器说明见 [README.node-docker.md](README.node-docker.md)。
+支持 **Cloudflare Workers Static Assets + D1 + 可选私有 R2**，以及 **自有 Node.js / Docker + SQLite** 两种部署。两种环境共用播放器、音质策略与媒体代理，代码均已合入 `master`；自有服务器说明见 [README.node-docker.md](README.node-docker.md)。
 
 **在线使用：[music.nyasakura.com](https://music.nyasakura.com/)**
 
@@ -64,7 +64,9 @@ Cloudflare 版本输出 **MP3 Packed Audio M3U8**：Worker 为音频添加 ID3 �
 | 会员歌曲 | 取决于登录账号的权限、曲目可用性和音乐平台返回结果 |
 | 视频输出 | Cloudflare 版不提供封面视频、随机背景视频、MP4 输出或 FFmpeg HLS 视频转码；预览页可播放已有视频直链 |
 | 流量 | 音频经过 Worker；使用前应评估 Cloudflare 与上游平台的配额和限制 |
-| VRChat | 浏览器播放成功不代表所有世界播放器可播放；还取决于播放器后端、允许域名和房间规则 |
+| VRChat | 轻量音频 M3U8 优先选择 AVPro / Stream 模式；视频模式可能无法选到可播放格式，仍受允许域名和房间规则限制 |
+
+**台 K / VRChat：先将房间播放器切到 AVPro（部分播放器标为 Stream / 流媒体），再粘贴生成的 `stream.m3u8` 直链。** 2026-10-07，PC 台 K 房间用户实测确认同一链接切换 AVPro 后可以播放；此结果不代表所有世界或 Quest / 安卓播放器均兼容。若出现 `Requested format is not available`，先检查模式；只有视频模式的房间需要世界作者增加 AVPro，或使用自有服务器的真实视频输出。详细步骤见[音质与播放限制](website/guide/quality.md#vrchat--台-k)。[VRChat 官方播放器说明](https://creators.vrchat.com/worlds/udon/video-players/)区分了两种后端的能力。
 
 VRChat 公开 / 群组公开房间需要世界作者将媒体域名加入 `Video Player Allowed Domains`，观众启用 `Allow Untrusted URLs`。将链接放入第三方播放器的 `?url=` 参数，不能保证该站支持转发或房间允许最终媒体域名。请参阅 [VRChat 官方规则](https://creators.vrchat.com/worlds/udon/video-players/www-whitelist/)。
 
@@ -73,7 +75,7 @@ VRChat 公开 / 群组公开房间需要世界作者将媒体域名加入 `Video
 需要 **Node.js 24+**、npm 和 Git。以下示例使用 PowerShell：
 
 ```powershell
-git clone --branch codex/cloudflare-serverless https://github.com/znc15/MusicForUrl.git
+git clone --branch master https://github.com/znc15/MusicForUrl.git
 cd MusicForUrl/cloudflare
 npm ci
 Copy-Item .dev.vars.example .dev.vars

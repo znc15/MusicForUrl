@@ -271,6 +271,8 @@ function renderGeneratedUrlOptions() {
     const url = escapeHtml(opt && opt.url ? opt.url : '');
     const selected = type && type === selectedGeneratedUrlType;
     const selectedBadge = selected && lastGeneratedUrls.length > 1 ? '<span class="url-option-selected">已选</span>' : '';
+    const playbackHint = type === 'lite'
+      ? '<span class="url-option-hint">VRChat：优先使用 AVPro / Stream</span>' : '';
 
     return `
       <button type="button" class="url-option ${selected ? 'selected' : ''}" data-url-type="${escapeHtml(type)}" aria-pressed="${selected}">
@@ -278,6 +280,7 @@ function renderGeneratedUrlOptions() {
           <span class="url-option-title">${label}</span>
           ${selectedBadge}
         </span>
+        ${playbackHint}
         <span class="url-option-url">${url}</span>
       </button>
     `;

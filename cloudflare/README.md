@@ -37,7 +37,9 @@ Cloudflare 目前建议新项目使用 Workers Static Assets；若你习惯 Page
 
 轻量 M3U8 使用 [RFC 8216 第 3.4 节](https://www.rfc-editor.org/rfc/rfc8216.html#section-3.4)的 MP3 Packed Audio 分片。分片添加 `com.apple.streaming.transportStreamTimestamp` ID3 PRIV 时间戳，并通过同一站点域名流式输出。每首歌之间保留 `EXT-X-DISCONTINUITY`，媒体时间戳从零开始；此模式不进行音频转码或生成视频画面。分片为完整歌曲文件，不提供字节范围分片，普通 `Range` 请求返回完整的 200 响应；HEAD 只读取少量源数据并返回正确的完整长度。流式代理会使音频数据经过 Worker。
 
-VRChat 的具体播放能力仍取决于播放器后端。公开／群组公开房间还要求世界作者将媒体域名加入 `Video Player Allowed Domains`，并由用户启用 `Allow Untrusted URLs`，见 [VRChat 官方域名规则](https://creators.vrchat.com/worlds/udon/video-players/www-whitelist/)。把自有链接放入第三方 `?url=` 参数，不代表该服务支持解析它，也不保证最终媒体域名被允许。生成的播放链接默认有效 **24 小时**，最长可配为 48 小时；退出登录会立即撤销已生成链接。
+VRChat / 台 K 播放轻量音频 M3U8 时优先选择 **AVPro / Stream / 流媒体** 模式，并粘贴生成的 `stream.m3u8` 直链。2026-10-07 的 PC 台 K 用户实测确认切换 AVPro 后可以播放；其他世界与 Quest / 安卓仍需实际验证。若出现 `Requested format is not available`，先检查模式；视频模式可能过滤掉音频 HLS。只有视频模式的房间需要世界作者增加 AVPro，或改用自有服务器的真实视频输出；修改文件后缀或 MIME 不会生成视频轨道。参见 [VRChat 官方播放器说明](https://creators.vrchat.com/worlds/udon/video-players/)。
+
+公开／群组公开房间还要求世界作者将媒体域名加入 `Video Player Allowed Domains`，并由用户启用 `Allow Untrusted URLs`，见 [VRChat 官方域名规则](https://creators.vrchat.com/worlds/udon/video-players/www-whitelist/)。把自有链接放入第三方 `?url=` 参数，不代表该服务支持解析它，也不保证最终媒体域名被允许。生成的播放链接默认有效 **24 小时**，最长可配为 48 小时；退出登录会立即撤销已生成链接。
 
 网易云播放地址优先使用新版 `song_url_v1` 接口；若未返回可播放地址，会回退到原码率接口。`MUSIC_QUALITY=medium` 保留原有 192 kbps 接口，因为新版没有对应的 192 kbps 档位。
 

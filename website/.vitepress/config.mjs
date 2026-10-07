@@ -39,7 +39,7 @@ export default defineConfig({
     ],
     search: { provider: 'local' },
     socialLinks: [{ icon: 'github', link: 'https://github.com/znc15/MusicForUrl' }],
-    editLink: { pattern: 'https://github.com/znc15/MusicForUrl/edit/codex/cloudflare-serverless/website/:path', text: '在 GitHub 编辑此页' },
+    editLink: { pattern: 'https://github.com/znc15/MusicForUrl/edit/master/website/:path', text: '在 GitHub 编辑此页' },
     footer: { message: 'MusicForUrl · MIT License', copyright: '项目文档从仓库构建，随提交自动发布。' },
     outline: { label: '本页目录', level: [2, 3] },
     docFooter: { prev: '上一页', next: '下一页' },

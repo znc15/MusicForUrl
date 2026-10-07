@@ -20,7 +20,7 @@ for (const [source, target] of docs) {
     const [filename, anchor] = url.split('#');
     const path = relative(root, resolve(root, dirname(source), filename)).replaceAll('\\', '/');
     if (path === '.github/assets/workspace-preview.jpg') return label + '(/images/workspace-preview.jpg)';
-    const destination = links.get(path) || 'https://github.com/znc15/MusicForUrl/blob/codex/cloudflare-serverless/' + path;
+    const destination = links.get(path) || 'https://github.com/znc15/MusicForUrl/blob/master/' + path;
     return label + '(' + destination + (anchor ? '#' + anchor : '') + ')';
   });
   await writeFile(resolve(website, 'generated/' + target + '.md'), '---\neditLink: false\n---\n\n' + text);

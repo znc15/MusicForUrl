@@ -131,6 +131,7 @@ a { color: inherit; }
 .url-option-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .url-option-title { font-size: 13px; font-weight: 600; }
 .url-option-selected { font-size: 12px; color: var(--text-dim); }
+.url-option-hint { display: block; margin-bottom: 6px; color: var(--accent-text); font-size: 12px; line-height: 1.5; }
 .url-option-url { display: block; color: var(--text-dim); font: 12px/1.8 Consolas, "SFMono-Regular", monospace; overflow-wrap: anywhere; max-height: 108px; overflow-y: auto; }
 .action-buttons { display: flex; gap: 11px; }
 .action-buttons .btn { flex: 1; }

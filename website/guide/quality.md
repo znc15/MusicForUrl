@@ -25,4 +25,14 @@
 - Cloudflare 导出的 M3U8：MP3 Packed Audio，每首歌一个完整片段，带 ID3 时间戳。不运行 FFmpeg，不提供视频或无损 HLS。
 - 自有服务器旧 HLS / MP4 输出：需要 FFmpeg；属于独立转码链路，网页音质选择不会更改已经生成的转码文件。
 
-VRChat 播放成功需要播放器支持格式且房间允许媒体域名。第三方 `?url=` 页面不能保证转发本站音源。参考 [VRChat 官方允许域名说明](https://creators.vrchat.com/worlds/udon/video-players/www-whitelist/)。
+## VRChat / 台 K
+
+Cloudflare 轻量 M3U8 是音频 HLS，不包含视频画面。2026-10-07，PC 台 K 房间用户实测确认同一链接切换到 AVPro 后可以播放；其他世界与 Quest / 安卓需分别验证。
+
+1. 在房间播放器中选择 **AVPro**，部分播放器标为 **Stream / 流媒体**。
+2. 粘贴本站生成的 `stream.m3u8` 完整直链，再开始播放。
+3. 若出现 `Requested format is not available`，先检查是否仍在视频模式；该错误表示解析器没有选到符合播放器要求的格式。不同后端的筛选条件可能不同，音频 HLS 可被视频模式过滤。
+
+只有视频模式的房间，需要世界作者增加 AVPro，或使用自有服务器部署的真实 HLS / MP4 视频输出。Cloudflare 轻量模式不运行 FFmpeg；修改后缀、MIME 或清单标签不会增加真实视频轨道。两种后端的区别见 [VRChat 官方播放器说明](https://creators.vrchat.com/worlds/udon/video-players/)。
+
+播放还需要房间允许媒体域名、观众启用对应的 URL 设置。第三方 `?url=` 页面不能保证转发本站音源。参考 [VRChat 官方允许域名说明](https://creators.vrchat.com/worlds/udon/video-players/www-whitelist/)。
