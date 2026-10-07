@@ -20,12 +20,14 @@ let isLoadingHistory = false;
 
 let qrKey = '';
 let qrCheckInterval = null;
+let qrLoadGeneration = 0;
 
-let currentPlatform = 'netease';
+let currentPlatform = localStorage.getItem('generatorPlatform') === 'qq' ? 'qq' : 'netease';
 let qqToken = localStorage.getItem('qqToken') || '';
 let qqCurrentUser = null;
 let qqQrKey = '';
 let qqQrCheckInterval = null;
+let qqQrLoadGeneration = 0;
 let qqUserPlaylists = [];
 let qqPlaylistPage = 1;
 let qqPlaylistTotal = 0;
@@ -46,10 +48,16 @@ let qqCenterTab = 'playlists';
 
 const SPA_VIEW_CONTAINER_ID = 'appView';
 const SPA_VIEW_CACHE = new Map();
+let viewGeneration = 0;
+const motion = window.MfuMotion;
+const workspace = window.MfuWorkspace;
+let loginReturnPath = '/user';
+const knownAccountTokens = { netease: token, qq: qqToken };
 let lastAutoPlayId = null;
 let lastGeneratedUrl = '';
 let lastGeneratedUrls = [];
 let selectedGeneratedUrlType = 'hls';
+let modalReturnFocus = null;
 const MFU_ERROR = (typeof window !== 'undefined' && window.MfuError) ? window.MfuError : null;
 
 function hasSpaContainer() {
@@ -57,14 +65,11 @@ function hasSpaContainer() {
 }
 
 function resolveViewFromPath(pathname) {
-  const p = (pathname || '/').replace(/\/+$/, '') || '/';
-  if (p === '/user' || p === '/user.html') return 'user';
-  return 'home';
+  return workspace.routeFromPath(pathname);
 }
 
 function viewTitle(view) {
-  if (view === 'user') return '个人中心 - MusicForUrl';
-  return 'MusicForUrl';
+  return workspace.TITLES[view] + ' - MusicForUrl';
 }
 
 function isUserViewActive() {
@@ -152,26 +157,31 @@ async function fetchViewHtml(view) {
   return html;
 }
 
-function animateViewEnter(container) {
-  if (!container) return;
-  container.classList.remove('view-enter');
-  void container.offsetWidth;
-  container.classList.add('view-enter');
-}
-
 async function renderView(view) {
   const container = document.getElementById(SPA_VIEW_CONTAINER_ID);
   if (!container) return;
-
-  container.innerHTML = `<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>`;
-  document.title = viewTitle(view);
+  const generation = ++viewGeneration;
+  const isCurrent = () => generation === viewGeneration;
+  motion.stop(container);
+  container.setAttribute('aria-busy', 'true');
 
   try {
     const html = await fetchViewHtml(view);
-    container.innerHTML = html;
-    animateViewEnter(container);
-    onViewMounted(view);
+    if (!isCurrent()) return;
+    await motion.page(container, () => {
+      const previousView = container.dataset.view;
+      workspace.leave();
+      container.innerHTML = html;
+      container.dataset.view = view;
+      document.title = viewTitle(view);
+      onViewMounted(view);
+      if (previousView && previousView !== view && isCurrent()) {
+        container.focus({ preventScroll: true });
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }
+    }, isCurrent);
   } catch (e) {
+    if (!isCurrent()) return;
     logError({
       channel: 'spa',
       scope: 'SPA_VIEW_FETCH',
@@ -179,8 +189,13 @@ async function renderView(view) {
       errorCode: e && e.errorCode,
       meta: e && e._errorMeta ? e._errorMeta : e
     });
-    container.innerHTML = `<div class="empty">${escapeHtml(toErrorDisplay(e, '页面加载失败，请刷新重试'))}</div>`;
-    animateViewEnter(container);
+    await motion.page(container, () => {
+      workspace.leave();
+      workspace.syncNavigation(view);
+      container.innerHTML = `<div class="empty">${escapeHtml(toErrorDisplay(e, '页面加载失败，请刷新重试'))}</div>`;
+    }, isCurrent);
+  } finally {
+    if (isCurrent()) container.removeAttribute('aria-busy');
   }
 }
 
@@ -192,6 +207,7 @@ function renderCurrentRoute() {
 
 function interceptInternalLinks() {
   document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
     const a = e.target && e.target.closest ? e.target.closest('a') : null;
     if (!a) return;
 
@@ -211,7 +227,7 @@ function interceptInternalLinks() {
   });
 }
 
-function maybeRestoreHomeState() {
+function maybeRestoreHomeState(animate = true) {
   const result = document.getElementById('resultSection');
   if (!result) return;
 
@@ -223,9 +239,9 @@ function maybeRestoreHomeState() {
 
     if (cover) cover.src = imageSrc(currentPlaylist.cover);
     if (name) name.textContent = currentPlaylist.name || '';
-    if (meta) meta.textContent = `共 ${currentPlaylist.songCount} 首`;
+    if (meta) meta.textContent = `共 ${currentPlaylist.songCount || 0} 首`;
     if (urlOptions) renderGeneratedUrlOptions();
-    result.classList.add('show');
+    motion.reveal(result, animate);
     updateFavoriteBtn();
   }
 }
@@ -252,21 +268,18 @@ function renderGeneratedUrlOptions() {
   const html = lastGeneratedUrls.map((opt) => {
     const type = String(opt && opt.type ? opt.type : '');
     const label = escapeHtml(opt && opt.label ? opt.label : type);
-    const note = escapeHtml(opt && opt.note ? opt.note : '');
     const url = escapeHtml(opt && opt.url ? opt.url : '');
     const selected = type && type === selectedGeneratedUrlType;
-    const selectedBadge = selected ? '<div class="url-option-selected">已选</div>' : '';
-    const noteHtml = note ? `<div class="url-option-note">${note}</div>` : '';
+    const selectedBadge = selected && lastGeneratedUrls.length > 1 ? '<span class="url-option-selected">已选</span>' : '';
 
     return `
-      <div class="url-option ${selected ? 'selected' : ''}" onclick="selectUrlOption('${type}')">
-        <div class="url-option-header">
-          <div class="url-option-title">${label}</div>
+      <button type="button" class="url-option ${selected ? 'selected' : ''}" data-url-type="${escapeHtml(type)}" aria-pressed="${selected}">
+        <span class="url-option-header">
+          <span class="url-option-title">${label}</span>
           ${selectedBadge}
-        </div>
-        ${noteHtml}
-        <div class="url-option-url">${url}</div>
-      </div>
+        </span>
+        <span class="url-option-url">${url}</span>
+      </button>
     `;
   }).join('');
 
@@ -277,6 +290,8 @@ function selectUrlOption(type) {
   selectedGeneratedUrlType = String(type || '');
   lastGeneratedUrl = getSelectedGeneratedUrl();
   renderGeneratedUrlOptions();
+  [...document.querySelectorAll('[data-url-type]')]
+    .find(button => button.dataset.urlType === selectedGeneratedUrlType)?.focus({ preventScroll: true });
 }
 
 async function maybeAutoplayFromUrl() {
@@ -292,25 +307,19 @@ async function maybeAutoplayFromUrl() {
   const input = document.getElementById('playlistInput');
   if (!input) return;
   input.value = playId;
-  await generatePlaylist();
+  await generatePlaylist({ interactive: false });
 }
 
 function onViewMounted(view) {
+  workspace.mount(view);
   if (view === 'home') {
     restorePlatformTab();
-    maybeRestoreHomeState();
+    maybeRestoreHomeState(false);
     maybeAutoplayFromUrl();
     return;
   }
 
   if (view === 'user') {
-    if (!token && !qqToken) {
-      showToast('请先登录', 'error');
-      showLogin();
-      navigate('/', { replace: true });
-      return;
-    }
-
     rememberPersonalPlatform(resolveDefaultPersonalPlatform());
     renderPersonalCenter();
   }
@@ -393,8 +402,8 @@ function renderPersonalCenter() {
 
   if (neteaseTabBtn) neteaseTabBtn.classList.toggle('active', personalPlatform === 'netease');
   if (qqTabBtn) qqTabBtn.classList.toggle('active', personalPlatform === 'qq');
-  neteasePanel.classList.toggle('active', personalPlatform === 'netease');
-  qqPanel.classList.toggle('active', personalPlatform === 'qq');
+  if (neteaseTabBtn) neteaseTabBtn.setAttribute('aria-pressed', personalPlatform === 'netease');
+  if (qqTabBtn) qqTabBtn.setAttribute('aria-pressed', personalPlatform === 'qq');
 
   if (token) {
     neteaseAuthState.innerHTML = renderPlatformStatusCard('netease');
@@ -418,6 +427,7 @@ function renderPersonalCenter() {
     qqAuthState.innerHTML = renderPersonalAuthPanel('qq');
     qqContent.style.display = 'none';
   }
+  motion.select([neteaseTabBtn, qqTabBtn], [neteasePanel, qqPanel], personalPlatform === 'qq' ? 1 : 0);
 }
 
 function initSpa() {
@@ -429,8 +439,27 @@ function initSpa() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  workspace.bind({
+    accounts: () => [
+      { platform: 'netease', user: currentUser, hasToken: !!token },
+      { platform: 'qq', user: qqCurrentUser, hasToken: !!qqToken },
+    ],
+    activePlatform: () => currentPlatform,
+    switchAccount(platform) {
+      rememberPersonalPlatform(platform);
+      switchPlatform(platform);
+      updateUserUI();
+      showToast('已切换到' + (platform === 'qq' ? 'QQ 音乐' : '网易云音乐'));
+    },
+    refreshAccount: platform => platform === 'qq' ? checkQQLoginStatus() : checkLoginStatus(),
+    login: showLogin,
+    logout: platform => platform === 'qq' ? logoutQQ() : logout(),
+    generated: () => ({ url: getSelectedGeneratedUrl(), title: currentPlaylist?.name, platform: currentPlaylist?._platform }),
+    navigate, toast: showToast, escape: escapeHtml, image: imageSrc, preferencesSaved: updateUserUI,
+  });
   initTheme();
   installGlobalUiErrorHandlers();
+  installUiInteractions();
   loadIncludes();
   initSpa();
 });
@@ -445,6 +474,8 @@ async function loadIncludes() {
       if (res.ok) {
         headerPlaceholder.outerHTML = await res.text();
         initTheme();
+        workspace.syncNavigation();
+        updateUserUI();
         if (token) checkLoginStatus();
         if (qqToken) checkQQLoginStatus();
       } else {
@@ -520,13 +551,87 @@ function toggleTheme() {
 }
 
 function showAbout() {
-  const modal = document.getElementById('aboutModal');
-  if (modal) modal.classList.add('show');
+  navigate('/about');
 }
 
 function hideAbout() {
-  const modal = document.getElementById('aboutModal');
-  if (modal) modal.classList.remove('show');
+  closeModal('aboutModal');
+}
+
+function openModal(id) {
+  const modal = document.getElementById(id);
+  if (!modal) return;
+  if (!modal.classList.contains('show')) modalReturnFocus = document.activeElement;
+  modal.setAttribute('aria-hidden', 'false');
+  modal.classList.add('show');
+  document.body.classList.add('modal-open');
+  document.querySelector('.container')?.setAttribute('inert', '');
+  document.querySelector('.site-footer')?.setAttribute('inert', '');
+  modal.querySelector('.modal-close')?.focus();
+  motion.modal(modal, true);
+}
+
+function closeModal(id) {
+  const modal = document.getElementById(id);
+  if (!modal || !modal.classList.contains('show') || modal.dataset.closing) return;
+  motion.modal(modal, false, () => {
+    modal.classList.remove('show');
+    const anotherOpen = document.querySelector('.modal-overlay.show');
+    if (!anotherOpen) {
+      document.body.classList.remove('modal-open');
+      document.querySelector('.container')?.removeAttribute('inert');
+      document.querySelector('.site-footer')?.removeAttribute('inert');
+      if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
+      else document.getElementById('appView')?.focus();
+      modalReturnFocus = null;
+    }
+    modal.setAttribute('aria-hidden', 'true');
+  });
+}
+
+function installUiInteractions() {
+  document.addEventListener('click', (event) => {
+    const option = event.target.closest?.('[data-url-type]');
+    if (option) selectUrlOption(option.dataset.urlType);
+    if (event.target.classList?.contains('modal-overlay')) {
+      if (event.target.id === 'loginModal') hideLogin();
+      if (event.target.id === 'aboutModal') hideAbout();
+    }
+  });
+  document.addEventListener('input', (event) => {
+    if (event.target.id !== 'playlistInput') return;
+    event.target.removeAttribute('aria-invalid');
+    setGeneratorFeedback('');
+  });
+  document.addEventListener('keydown', (event) => {
+    const modal = document.querySelector('.modal-overlay.show');
+    if (!modal) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (modal.id === 'loginModal') hideLogin();
+      else hideAbout();
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = [...modal.querySelectorAll('button, input, textarea, a[href], [tabindex="0"]')]
+      .filter((el) => !el.disabled && el.getClientRects().length);
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+      event.preventDefault();
+      first?.focus();
+    }
+  });
+}
+
+function setGeneratorFeedback(message, type = '') {
+  const feedback = document.getElementById('generatorFeedback');
+  if (!feedback) return;
+  feedback.textContent = message;
+  feedback.className = 'generator-feedback' + (type ? ' ' + type : '');
+  feedback.hidden = !message;
 }
 
 function switchPersonalTab(tab) {
@@ -534,15 +639,6 @@ function switchPersonalTab(tab) {
 
   if (!token) return;
 
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-  
-  const tabBtn = document.getElementById(tab === 'playlists' ? 'tabPlaylists' : tab === 'favorites' ? 'tabFavorites' : 'tabHistory');
-  const tabContent = document.getElementById(tab === 'playlists' ? 'playlistsContent' : tab === 'favorites' ? 'favoritesContent' : 'historyContent');
-
-  if (tabBtn) tabBtn.classList.add('active');
-  if (tabContent) tabContent.classList.add('active');
-  
   if (tab === 'playlists') {
     if (userPlaylists.length === 0) {
       loadUserPlaylists(1);
@@ -565,6 +661,7 @@ function switchPersonalTab(tab) {
       renderPagination('historyPagination', historyTotal, historyPage, PAGE_SIZE, 'loadHistory');
     }
   }
+  motion.select(document.querySelectorAll('#neteaseContent .tab-btn'), document.querySelectorAll('#neteaseContent .tab-content'), ['playlists', 'favorites', 'history'].indexOf(tab));
 }
 
 function switchQQPersonalTab(tab) {
@@ -612,16 +709,9 @@ function switchQQPersonalTab(tab) {
   };
 
   const keys = Object.keys(tabMap);
-  keys.forEach((key) => {
-    const conf = tabMap[key];
-    const btn = document.getElementById(conf.buttonId);
-    const content = document.getElementById(conf.contentId);
-    if (btn) btn.classList.toggle('active', key === tab);
-    if (content) content.classList.toggle('active', key === tab);
-  });
-
   if (tabMap[tab]) {
     tabMap[tab].load();
+    motion.select(keys.map(key => document.getElementById(tabMap[key].buttonId)), keys.map(key => document.getElementById(tabMap[key].contentId)), keys.indexOf(tab));
   }
 }
 
@@ -663,7 +753,7 @@ function showToast(message, type = 'success') {
   if (!toast) return;
   toast.textContent = message;
   toast.className = 'toast ' + type + ' show';
-  setTimeout(() => toast.classList.remove('show'), 3000);
+  motion.toast(toast);
 }
 
 function normalizeScope(scope) {
@@ -720,7 +810,9 @@ function showActionError(errorLike, fallbackMessage) {
 
 function renderInlineError(container, errorLike, fallbackMessage) {
   if (!container) return;
-  container.innerHTML = `<div class="empty">${escapeHtml(toErrorDisplay(errorLike, fallbackMessage))}</div>`;
+  motion.listContent(container, `<div class="empty">${escapeHtml(toErrorDisplay(errorLike, fallbackMessage))}</div>`);
+  const pagination = document.getElementById(container.id.replace(/List$/, 'Pagination'));
+  if (pagination) pagination.querySelectorAll('button').forEach(button => { button.disabled = button.dataset.boundary === 'true'; });
 }
 
 async function requestJson(basePath, path, options = {}, scope = 'UNKNOWN', tokenHeader = '', tokenValue = '') {
@@ -835,8 +927,10 @@ function installGlobalUiErrorHandlers() {
 }
 
 function switchPlatform(platform) {
+  platform = platform === 'qq' ? 'qq' : 'netease';
   if (currentPlatform === platform) return;
   currentPlatform = platform;
+  localStorage.setItem('generatorPlatform', platform);
 
   const nBtn = document.getElementById('platformNetease');
   const qBtn = document.getElementById('platformQQ');
@@ -852,10 +946,13 @@ function switchPlatform(platform) {
   }
 
   const result = document.getElementById('resultSection');
-  if (result) result.classList.remove('show');
+  motion.hide(result);
+  if (input) input.removeAttribute('aria-invalid');
+  setGeneratorFeedback('');
   currentPlaylist = null;
   lastGeneratedUrl = '';
   lastGeneratedUrls = [];
+  restorePlatformTab();
 }
 
 function restorePlatformTab() {
@@ -863,17 +960,22 @@ function restorePlatformTab() {
   const qBtn = document.getElementById('platformQQ');
   if (nBtn) nBtn.classList.toggle('active', currentPlatform === 'netease');
   if (qBtn) qBtn.classList.toggle('active', currentPlatform === 'qq');
+  if (nBtn) nBtn.setAttribute('aria-pressed', currentPlatform === 'netease');
+  if (qBtn) qBtn.setAttribute('aria-pressed', currentPlatform === 'qq');
+  motion.syncIndicator(nBtn?.parentElement);
 
   const input = document.getElementById('playlistInput');
   if (input) {
     input.placeholder = currentPlatform === 'qq'
-      ? '粘贴QQ音乐歌单链接或ID'
-      : '粘贴网易云歌单链接或ID';
+      ? '粘贴 QQ 音乐歌单链接或 ID'
+      : '粘贴网易云歌单链接或 ID';
   }
 }
 
 async function checkLoginStatus() {
+  const requestToken = token;
   const res = await api('/auth/status', {}, 'AUTH_STATUS');
+  if (requestToken !== token) return;
   if (res.success && res.data.logged) {
     currentUser = res.data.user;
     updateUserUI();
@@ -886,6 +988,14 @@ async function checkLoginStatus() {
 }
 
 function updateUserUI() {
+  for (const platform of ['netease', 'qq']) {
+    const activeToken = platform === 'qq' ? qqToken : token;
+    if (knownAccountTokens[platform] !== activeToken) {
+      knownAccountTokens[platform] = activeToken;
+      resetAccountCollections(platform);
+    }
+  }
+  workspace.refreshAccounts();
   const area = document.getElementById('userArea');
   if (!area) return;
 
@@ -893,12 +1003,37 @@ function updateUserUI() {
   const hasQQ = !!qqCurrentUser;
 
   if (!hasNetease && !hasQQ) {
-    area.innerHTML = `<button class="btn btn-primary" onclick="showLogin()">登录</button>`;
-    if (isUserViewActive()) navigate('/', { replace: true });
+    area.innerHTML = '<button type="button" class="sidebar-account" onclick="showLogin()"><span class="account-avatar-placeholder">♫</span><span><strong>' +
+      (token || qqToken ? '账号信息待确认' : '登录音乐账号') + '</strong><small>网易云音乐 · QQ 音乐</small></span><span aria-hidden="true">↗</span></button>';
     return;
   }
 
-  area.innerHTML = `<button class="btn btn-primary" onclick="navigate('/user')">个人中心</button>`;
+  const platform = (currentPlatform === 'qq' && hasQQ) || !hasNetease ? 'qq' : 'netease';
+  const user = platform === 'qq' ? qqCurrentUser : currentUser;
+  const prefs = workspace.accountPreferences({ platform, user });
+  area.innerHTML = '<button type="button" class="sidebar-account" onclick="navigate(\'/accounts\')"><img class="user-avatar" src="' +
+    imageSrc(user.avatar) + '" alt="" referrerpolicy="no-referrer"><span><strong>' + escapeHtml(prefs.name || user.nickname || '音乐账号') +
+    '</strong><small>' + (platform === 'qq' ? 'QQ 音乐' : '网易云音乐') + ' · 已登录</small></span><span aria-hidden="true">↗</span></button>';
+}
+
+function resetAccountCollections(platform) {
+  if (platform === 'qq') {
+    qqUserPlaylists = []; qqUserFavorites = []; qqUserHistory = [];
+    qqPlaylistTotal = 0; qqFavoriteTotal = 0; qqHistoryTotal = 0;
+    qqPlaylistPage = 1; qqFavoritePage = 1; qqHistoryPage = 1;
+    isLoadingQQPlaylists = false; isLoadingQQFavorites = false; isLoadingQQHistory = false;
+  } else {
+    userPlaylists = []; userFavorites = []; userHistory = [];
+    playlistTotal = 0; favoriteTotal = 0; historyTotal = 0;
+    playlistPage = 1; favoritePage = 1; historyPage = 1;
+    isLoadingPlaylists = false; isLoadingFavorites = false; isLoadingHistory = false;
+  }
+  if (currentPlaylist?._platform === platform) {
+    currentPlaylist = null; lastGeneratedUrl = ''; lastGeneratedUrls = [];
+    motion.hide(document.getElementById('resultSection'));
+  }
+  lastAutoPlayId = null;
+  workspace.invalidatePlatform(platform);
 }
 
 function logout(notify = true) {
@@ -915,16 +1050,19 @@ function logout(notify = true) {
 }
 
 function showLogin(platform) {
+  loginReturnPath = resolveViewFromPath(location.pathname) === 'accounts' ? '/accounts' : '/user';
   const modal = document.getElementById('loginModal');
   if (modal) {
-    modal.classList.add('show');
+    openModal('loginModal');
     switchLoginPlatform(platform || currentPlatform || 'netease');
   }
 }
 
 function hideLogin() {
+  qrLoadGeneration++;
+  qqQrLoadGeneration++;
   const modal = document.getElementById('loginModal');
-  if (modal) modal.classList.remove('show');
+  if (modal) closeModal('loginModal');
   if (qrCheckInterval) {
     clearInterval(qrCheckInterval);
     qrCheckInterval = null;
@@ -936,20 +1074,17 @@ function hideLogin() {
 }
 
 function switchLoginPlatform(platform) {
+  platform = platform === 'qq' ? 'qq' : 'netease';
   loginPlatform = platform;
 
   const nBtn = document.getElementById('loginPlatformNetease');
   const qBtn = document.getElementById('loginPlatformQQ');
-  if (nBtn) nBtn.classList.toggle('active', platform === 'netease');
-  if (qBtn) qBtn.classList.toggle('active', platform === 'qq');
-
   const nPanel = document.getElementById('neteaseLoginPanel');
   const qPanel = document.getElementById('qqLoginPanel');
-  if (nPanel) nPanel.style.display = platform === 'netease' ? '' : 'none';
-  if (qPanel) qPanel.style.display = platform === 'qq' ? '' : 'none';
+  motion.select([nBtn, qBtn], [nPanel, qPanel], platform === 'qq' ? 1 : 0);
 
   const title = document.getElementById('loginModalTitle');
-  if (title) title.textContent = platform === 'qq' ? '登录QQ音乐' : '登录网易云';
+  if (title) title.textContent = platform === 'qq' ? '登录 QQ 音乐' : '登录网易云音乐';
 
   if (platform === 'netease') {
     switchLoginTab('qrcode');
@@ -964,17 +1099,11 @@ function switchLoginTab(tab) {
   const panel = document.getElementById('neteaseLoginPanel');
   if (!panel) return;
 
-  panel.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
-  panel.querySelectorAll('.login-content').forEach(c => c.classList.remove('active'));
-
   const tabs = ['qrcode', 'captcha', 'password', 'cookie'];
   const index = tabs.indexOf(tab);
 
   const tabBtns = panel.querySelectorAll('.login-tab');
-  if (tabBtns[index]) tabBtns[index].classList.add('active');
-
-  const content = document.getElementById(tab + 'Content');
-  if (content) content.classList.add('active');
+  motion.select(tabBtns, tabs.map(name => document.getElementById(name + 'Content')), index);
 
   if (tab === 'qrcode') {
     loadQRCode();
@@ -985,6 +1114,11 @@ function switchLoginTab(tab) {
 }
 
 async function loadQRCode() {
+  if (!isQrLoginActive('netease')) return;
+  const generation = ++qrLoadGeneration;
+  if (qrCheckInterval) clearInterval(qrCheckInterval);
+  qrCheckInterval = null;
+  qrKey = '';
   const img = document.getElementById('qrCodeImg');
   const status = document.getElementById('qrStatus');
   if (!img || !status) return;
@@ -993,6 +1127,7 @@ async function loadQRCode() {
   status.textContent = '加载中...';
   
   const res = await api('/auth/qrcode', {}, 'AUTH_QRCODE');
+  if (generation !== qrLoadGeneration || !isQrLoginActive('netease')) return;
   if (!res.success) {
     status.textContent = toErrorDisplay(res, '获取二维码失败，请重试');
     return;
@@ -1000,15 +1135,17 @@ async function loadQRCode() {
   
   qrKey = res.data.key;
   img.src = res.data.qrimg;
-  status.textContent = '请使用APP扫码';
+  status.textContent = '网易云音乐 App 扫码';
   
   if (qrCheckInterval) clearInterval(qrCheckInterval);
   qrCheckInterval = setInterval(checkQRCode, 2000);
 }
 
 async function checkQRCode() {
-  if (!qrKey) return;
-  const res = await api('/auth/qrcode/check?key=' + qrKey, {}, 'AUTH_QRCODE_CHECK');
+  if (!qrKey || !isQrLoginActive('netease')) return;
+  const checkingKey = qrKey;
+  const res = await api('/auth/qrcode/check?key=' + checkingKey, {}, 'AUTH_QRCODE_CHECK');
+  if (checkingKey !== qrKey || !isQrLoginActive('netease')) return;
   const status = document.getElementById('qrStatus');
 
   if (!res.success) {
@@ -1023,7 +1160,7 @@ async function checkQRCode() {
     clearInterval(qrCheckInterval);
     setTimeout(loadQRCode, 1000);
   } else if (res.code === 801) {
-    if (status) status.textContent = '请使用APP扫码';
+    if (status) status.textContent = '网易云音乐 App 扫码';
   } else if (res.code === 802) {
     if (status) status.textContent = '扫码成功，请确认';
   } else if (res.code === 803) {
@@ -1143,7 +1280,17 @@ async function loginWithCookie() {
   }
 }
 
+function isQrLoginActive(platform) {
+  return !!document.getElementById('loginModal')?.classList.contains('show') && loginPlatform === platform
+    && (platform === 'qq' || !!document.getElementById('qrcodeContent')?.classList.contains('active'));
+}
+
 async function loadQQQRCode() {
+  if (!isQrLoginActive('qq')) return;
+  const generation = ++qqQrLoadGeneration;
+  if (qqQrCheckInterval) clearInterval(qqQrCheckInterval);
+  qqQrCheckInterval = null;
+  qqQrKey = '';
   const img = document.getElementById('qqQrCodeImg');
   const status = document.getElementById('qqQrStatus');
   if (!img || !status) return;
@@ -1152,6 +1299,7 @@ async function loadQQQRCode() {
   status.textContent = '加载中...';
 
   const res = await qqApi('/auth/qrcode', {}, 'QQ_AUTH_QRCODE');
+  if (generation !== qqQrLoadGeneration || !isQrLoginActive('qq')) return;
   if (!res.success) {
     status.textContent = toErrorDisplay(res, '获取QQ二维码失败，请重试');
     return;
@@ -1166,8 +1314,10 @@ async function loadQQQRCode() {
 }
 
 async function checkQQQRCode() {
-  if (!qqQrKey) return;
-  const res = await qqApi('/auth/qrcode/check?key=' + qqQrKey, {}, 'QQ_AUTH_QRCODE_CHECK');
+  if (!qqQrKey || !isQrLoginActive('qq')) return;
+  const checkingKey = qqQrKey;
+  const res = await qqApi('/auth/qrcode/check?key=' + checkingKey, {}, 'QQ_AUTH_QRCODE_CHECK');
+  if (checkingKey !== qqQrKey || !isQrLoginActive('qq')) return;
   const status = document.getElementById('qqQrStatus');
 
   if (res.success === false) {
@@ -1200,14 +1350,16 @@ async function checkQQQRCode() {
     updateUserUI();
     refreshPersonalCenterIfActive();
     showToast('QQ音乐登录成功');
-    navigate('/user');
+    navigate(loginReturnPath);
   } else {
     console.warn('QQ扫码未知状态:', res);
   }
 }
 
 async function checkQQLoginStatus() {
+  const requestToken = qqToken;
   const res = await qqApi('/auth/status', {}, 'QQ_AUTH_STATUS');
+  if (requestToken !== qqToken) return;
   if (res.success && res.data.logged) {
     qqCurrentUser = res.data.user;
     updateUserUI();
@@ -1240,60 +1392,73 @@ function logoutQQ(notify = true) {
   if (notify) showToast('已退出QQ音乐登录');
 }
 
-async function generatePlaylist() {
-  if (currentPlatform === 'qq') {
-    if (!qqToken) return showToast('请先登录QQ音乐', 'error');
-  } else {
-    if (!token) return showToast('请先登录网易云', 'error');
+async function generatePlaylist({ interactive = true } = {}) {
+  const inputElement = document.getElementById('playlistInput');
+  const btn = document.getElementById('generateBtn');
+  if (!inputElement || !btn || btn.disabled) return;
+  const input = inputElement.value.trim();
+  if (!input) {
+    setGeneratorFeedback('请输入歌单链接或 ID', 'error');
+    inputElement.setAttribute('aria-invalid', 'true');
+    inputElement.focus();
+    return;
+  }
+  const isQQ = currentPlatform === 'qq';
+  if (!(isQQ ? qqToken : token)) {
+    if (interactive) {
+      setGeneratorFeedback(`请先登录${isQQ ? 'QQ 音乐' : '网易云音乐'}`);
+      showLogin(currentPlatform);
+    }
+    return;
   }
 
-  const input = document.getElementById('playlistInput').value.trim();
-  if (!input) return showToast('请输入链接', 'error');
-
-  const btn = document.getElementById('generateBtn');
   const originalText = btn.innerHTML;
-  btn.innerHTML = '<span class="loading"></span>';
+  const form = document.getElementById('playlistForm');
+  btn.innerHTML = '<span class="loading" aria-hidden="true"></span>解析中';
   btn.disabled = true;
+  inputElement.disabled = true;
+  form?.setAttribute('aria-busy', 'true');
+  document.querySelectorAll('.platform-tab').forEach(button => { button.disabled = true; });
+  inputElement.removeAttribute('aria-invalid');
+  setGeneratorFeedback('');
 
   try {
-    const isQQ = currentPlatform === 'qq';
     const callApi = isQQ ? qqApi : api;
     const parseScope = isQQ ? 'QQ_PLAYLIST_PARSE' : 'PLAYLIST_PARSE';
     const urlScope = isQQ ? 'QQ_PLAYLIST_URL' : 'PLAYLIST_URL';
     const parseRes = await callApi('/playlist/parse?url=' + encodeURIComponent(input), {}, parseScope);
     if (!parseRes.success) {
-      showActionError(parseRes, '解析歌单失败');
+      setGeneratorFeedback(toErrorDisplay(parseRes, '解析歌单失败，请检查歌单链接。'), 'error');
       return;
     }
 
-    currentPlaylist = parseRes.data;
-    currentPlaylist._platform = currentPlatform;
-
-    const urlRes = await callApi('/playlist/url?id=' + currentPlaylist.id, {}, urlScope);
+    const playlist = parseRes.data;
+    btn.innerHTML = '<span class="loading" aria-hidden="true"></span>生成中';
+    const urlRes = await callApi('/playlist/url?id=' + playlist.id, {}, urlScope);
     if (!urlRes.success) {
-      showActionError(urlRes, '生成链接失败');
+      setGeneratorFeedback(toErrorDisplay(urlRes, '生成链接失败，请稍后重试。'), 'error');
       return;
     }
-    
-    document.getElementById('playlistCover').src = imageSrc(currentPlaylist.cover);
-    document.getElementById('playlistName').textContent = currentPlaylist.name;
-    document.getElementById('playlistMeta').textContent = `共 ${currentPlaylist.songCount} 首`;
+    currentPlaylist = { ...playlist, _platform: isQQ ? 'qq' : 'netease' };
     lastGeneratedUrls = (urlRes.data && Array.isArray(urlRes.data.urls)) ? urlRes.data.urls : [];
     if (!lastGeneratedUrls.length && urlRes.data && urlRes.data.url) {
-      lastGeneratedUrls = [{ type: 'hls', label: 'HLS', url: String(urlRes.data.url) }];
+      lastGeneratedUrls = [{ type: 'lite', label: '轻量 M3U8', url: String(urlRes.data.url) }];
     }
     selectedGeneratedUrlType = (urlRes.data && urlRes.data.default) ? String(urlRes.data.default) : (lastGeneratedUrls[0]?.type || 'hls');
     lastGeneratedUrl = getSelectedGeneratedUrl();
-    renderGeneratedUrlOptions();
-    document.getElementById('resultSection').classList.add('show');
-    
-    updateFavoriteBtn();
-    
+    maybeRestoreHomeState();
+    setGeneratorFeedback('');
+    if (interactive) document.getElementById('resultSection')?.scrollIntoView({
+      block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    });
   } catch (e) {
-    showActionError(normalizeRuntimeError('PLAYLIST_GENERATE', e, '/ui/generatePlaylist'), '获取歌单失败');
+    setGeneratorFeedback(toErrorDisplay(normalizeRuntimeError('PLAYLIST_GENERATE', e, '/ui/generatePlaylist'), '获取歌单失败，请稍后重试。'), 'error');
   } finally {
     btn.innerHTML = originalText;
     btn.disabled = false;
+    inputElement.disabled = false;
+    form?.setAttribute('aria-busy', 'false');
+    document.querySelectorAll('.platform-tab').forEach(button => { button.disabled = false; });
   }
 }
 
@@ -1336,30 +1501,35 @@ function renderPagination(containerId, total, page, pageSize, callbackName) {
   
   const totalPages = Math.ceil(total / pageSize);
   if (totalPages <= 1) {
-    container.innerHTML = '';
+    motion.pagination(container, '');
     return;
   }
   
   let html = '';
   
-  html += `<button class="page-btn" onclick="${callbackName}(${page - 1})" ${page === 1 ? 'disabled' : ''}>&lt;</button>`;
+  html += `<button type="button" class="page-btn page-arrow" aria-label="上一页" data-boundary="${page === 1}" onclick="${callbackName}(${page - 1})" ${page === 1 ? 'disabled' : ''}>‹</button>`;
   
   const range = 2;
   
   for (let i = 1; i <= totalPages; i++) {
     if (i === 1 || i === totalPages || (i >= page - range && i <= page + range)) {
-      html += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="${callbackName}(${i})">${i}</button>`;
+      html += `<button type="button" class="page-btn ${i === page ? 'active' : ''}" data-page="${i}" data-distant="${i !== 1 && i !== totalPages && Math.abs(i - page) === range}" aria-label="第 ${i} 页" ${i === page ? 'aria-current="page"' : ''} onclick="${callbackName}(${i})">${i}</button>`;
     } else if (i === page - range - 1 || i === page + range + 1) {
-      html += `<span class="page-ellipsis">...</span>`;
+      html += `<span class="page-ellipsis" aria-hidden="true">…</span>`;
     }
   }
   
-  html += `<button class="page-btn" onclick="${callbackName}(${page + 1})" ${page === totalPages ? 'disabled' : ''}>&gt;</button>`;
+  html += `<button type="button" class="page-btn page-arrow" aria-label="下一页" data-boundary="${page === totalPages}" onclick="${callbackName}(${page + 1})" ${page === totalPages ? 'disabled' : ''}>›</button>`;
   
-  container.innerHTML = html;
+  container.setAttribute('role', 'navigation');
+  container.setAttribute('aria-label', '列表分页');
+  const focusPage = container.contains(document.activeElement) ? Number(document.activeElement.dataset.page) || page : null;
+  motion.pagination(container, html);
+  if (focusPage) container.querySelector(`[data-page="${page}"]`)?.focus({ preventScroll: true });
 }
 
 async function loadUserPlaylists(page = 1) {
+  const requestToken = token;
   if (isLoadingPlaylists) return;
   const list = document.getElementById('playlistsList');
   if (!list) return;
@@ -1367,11 +1537,11 @@ async function loadUserPlaylists(page = 1) {
   isLoadingPlaylists = true;
   playlistPage = page;
   
-  list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
-  document.getElementById('playlistsPagination').innerHTML = '';
+  motion.loading(list, document.getElementById('playlistsPagination'), page);
   
   const offset = (page - 1) * PAGE_SIZE;
   const res = await api(`/playlist/user?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'PLAYLIST_USER');
+  if (requestToken !== token) return;
   isLoadingPlaylists = false;
   
   if (!res.success) {
@@ -1391,7 +1561,7 @@ function renderPlaylists() {
   if (!list) return;
   
   if (userPlaylists.length === 0) {
-    list.innerHTML = '<div class="empty">暂无歌单</div>';
+    motion.listContent(list, '<div class="empty">暂无歌单</div>');
     return;
   }
   
@@ -1405,19 +1575,20 @@ function renderPlaylists() {
         <img class="item-cover" src="${safeCover}" alt="" referrerpolicy="no-referrer" loading="lazy">
         <div class="item-info">
           <div class="item-name">${safeName}</div>
-          <div class="item-meta">${count}首 • ID: ${safeId}</div>
+          <div class="item-meta">${count}首 · ID: ${safeId}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safeId}')">生成</button>
+          <button class="btn btn-primary" onclick="playFavorite('${safeId}')">生成</button>
         </div>
       </div>
     `;
   }).join('');
   
-  list.innerHTML = items;
+  motion.listContent(list, items);
 }
 
 async function loadQQUserPlaylists(page = 1) {
+  const requestToken = qqToken;
   if (!qqToken || qqCenterTab !== 'playlists') return;
   if (isLoadingQQPlaylists) return;
 
@@ -1426,12 +1597,11 @@ async function loadQQUserPlaylists(page = 1) {
 
   isLoadingQQPlaylists = true;
   qqPlaylistPage = page;
-  list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
-  const pagination = document.getElementById('qqPlaylistsPagination');
-  if (pagination) pagination.innerHTML = '';
+  motion.loading(list, document.getElementById('qqPlaylistsPagination'), page);
 
   const offset = (page - 1) * PAGE_SIZE;
   const res = await qqApi(`/playlist/user?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'QQ_PLAYLIST_USER');
+  if (requestToken !== qqToken) return;
   isLoadingQQPlaylists = false;
 
   if (!res.success) {
@@ -1451,7 +1621,7 @@ function renderQQPlaylists() {
   if (!list) return;
 
   if (!Array.isArray(qqUserPlaylists) || qqUserPlaylists.length === 0) {
-    list.innerHTML = '<div class="empty">暂无QQ音乐歌单</div>';
+    motion.listContent(list, '<div class="empty">暂无QQ音乐歌单</div>');
     return;
   }
 
@@ -1468,16 +1638,17 @@ function renderQQPlaylists() {
           <div class="item-meta"><span class="platform-badge-sm qq">QQ</span> ${count}首 · ID: ${safeId}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safeId}', 'qq')">生成</button>
+          <button class="btn btn-primary" onclick="playFavorite('${safeId}', 'qq')">生成</button>
         </div>
       </div>
     `;
   }).join('');
 
-  list.innerHTML = items;
+  motion.listContent(list, items);
 }
 
 async function loadQQFavorites(page = 1) {
+  const requestToken = qqToken;
   if (!qqToken || qqCenterTab !== 'favorites') return;
   if (isLoadingQQFavorites) return;
 
@@ -1486,12 +1657,11 @@ async function loadQQFavorites(page = 1) {
 
   isLoadingQQFavorites = true;
   qqFavoritePage = page;
-  list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
-  const pagination = document.getElementById('qqFavoritesPagination');
-  if (pagination) pagination.innerHTML = '';
+  motion.loading(list, document.getElementById('qqFavoritesPagination'), page);
 
   const offset = (page - 1) * PAGE_SIZE;
   const res = await qqApi(`/favorites?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'QQ_FAVORITES_LIST');
+  if (requestToken !== qqToken) return;
   isLoadingQQFavorites = false;
 
   if (!res.success) {
@@ -1511,7 +1681,7 @@ function renderQQFavorites() {
   if (!list) return;
 
   if (!Array.isArray(qqUserFavorites) || qqUserFavorites.length === 0) {
-    list.innerHTML = '<div class="empty">暂无QQ收藏</div>';
+    motion.listContent(list, '<div class="empty">暂无QQ收藏</div>');
     return;
   }
 
@@ -1527,17 +1697,18 @@ function renderQQFavorites() {
           <div class="item-meta"><span class="platform-badge-sm qq">QQ</span> ID: ${safePlaylistId}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safePlaylistId}', 'qq')">播放</button>
-          <button class="btn btn-ghost" style="padding: 0.4rem;" onclick="removeFavorite('${safePlaylistId}', false, 'qq')">删除</button>
+          <button class="btn btn-primary" onclick="playFavorite('${safePlaylistId}', 'qq')">播放</button>
+          <button class="btn btn-ghost" onclick="removeFavorite('${safePlaylistId}', false, 'qq')">删除</button>
         </div>
       </div>
     `;
   }).join('');
 
-  list.innerHTML = items;
+  motion.listContent(list, items);
 }
 
 async function loadQQHistory(page = 1) {
+  const requestToken = qqToken;
   if (!qqToken || qqCenterTab !== 'history') return;
   if (isLoadingQQHistory) return;
 
@@ -1546,12 +1717,11 @@ async function loadQQHistory(page = 1) {
 
   isLoadingQQHistory = true;
   qqHistoryPage = page;
-  list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
-  const pagination = document.getElementById('qqHistoryPagination');
-  if (pagination) pagination.innerHTML = '';
+  motion.loading(list, document.getElementById('qqHistoryPagination'), page);
 
   const offset = (page - 1) * PAGE_SIZE;
   const res = await qqApi(`/history/recent?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'QQ_HISTORY_RECENT');
+  if (requestToken !== qqToken) return;
   isLoadingQQHistory = false;
 
   if (!res.success) {
@@ -1571,7 +1741,7 @@ function renderQQHistory() {
   if (!list) return;
 
   if (!Array.isArray(qqUserHistory) || qqUserHistory.length === 0) {
-    list.innerHTML = '<div class="empty">暂无QQ最近播放歌单</div>';
+    motion.listContent(list, '<div class="empty">暂无QQ最近播放歌单</div>');
     return;
   }
 
@@ -1586,19 +1756,20 @@ function renderQQHistory() {
         <img class="item-cover" src="${safeCover}" alt="" referrerpolicy="no-referrer" loading="lazy">
         <div class="item-info">
           <div class="item-name">${safeName}</div>
-          <div class="item-meta"><span class="platform-badge-sm qq">QQ</span> 最近播放 ${playedAtText} • 播放 ${playCount} 次 • ID: ${safePlaylistId}</div>
+          <div class="item-meta"><span class="platform-badge-sm qq">QQ</span> 最近播放 ${playedAtText} · 播放 ${playCount} 次 · ID: ${safePlaylistId}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safePlaylistId}', 'qq')">获取链接</button>
+          <button class="btn btn-primary" onclick="playFavorite('${safePlaylistId}', 'qq')">获取链接</button>
         </div>
       </div>
     `;
   }).join('');
 
-  list.innerHTML = items;
+  motion.listContent(list, items);
 }
 
 async function loadFavorites(page = 1) {
+  const requestToken = token;
   if (isLoadingFavorites) return;
   const list = document.getElementById('favoritesList');
   if (!list) return;
@@ -1606,11 +1777,11 @@ async function loadFavorites(page = 1) {
   isLoadingFavorites = true;
   favoritePage = page;
   
-  list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
-  document.getElementById('favoritesPagination').innerHTML = '';
+  motion.loading(list, document.getElementById('favoritesPagination'), page);
 
   const offset = (page - 1) * PAGE_SIZE;
   const res = await api(`/favorites?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'FAVORITES_LIST');
+  if (requestToken !== token) return;
   isLoadingFavorites = false;
   
   if (!res.success) {
@@ -1630,7 +1801,7 @@ function renderFavorites() {
   if (!list) return;
   
   if (userFavorites.length === 0) {
-    list.innerHTML = '<div class="empty">暂无收藏</div>';
+    motion.listContent(list, '<div class="empty">暂无收藏</div>');
     return;
   }
   
@@ -1646,17 +1817,18 @@ function renderFavorites() {
           <div class="item-meta">ID: ${safePlaylistId}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safePlaylistId}')">播放</button>
-          <button class="btn btn-ghost" style="padding: 0.4rem;" onclick="removeFavorite('${safePlaylistId}')">删除</button>
+          <button class="btn btn-primary" onclick="playFavorite('${safePlaylistId}')">播放</button>
+          <button class="btn btn-ghost" onclick="removeFavorite('${safePlaylistId}')">删除</button>
         </div>
       </div>
     `;
   }).join('');
 
-  list.innerHTML = items;
+  motion.listContent(list, items);
 }
 
 async function loadHistory(page = 1) {
+  const requestToken = token;
   if (isLoadingHistory) return;
   const list = document.getElementById('historyList');
   if (!list) return;
@@ -1664,11 +1836,11 @@ async function loadHistory(page = 1) {
   isLoadingHistory = true;
   historyPage = page;
   
-  list.innerHTML = '<div style="text-align:center; padding: 2rem;"><span class="loading"></span></div>';
-  document.getElementById('historyPagination').innerHTML = '';
+  motion.loading(list, document.getElementById('historyPagination'), page);
 
   const offset = (page - 1) * PAGE_SIZE;
   const res = await api(`/history/recent?offset=${offset}&limit=${PAGE_SIZE}`, {}, 'HISTORY_RECENT');
+  if (requestToken !== token) return;
   isLoadingHistory = false;
   
   if (!res.success) {
@@ -1688,7 +1860,7 @@ function renderHistory() {
   if (!list) return;
   
   if (userHistory.length === 0) {
-    list.innerHTML = '<div class="empty">暂无最近播放歌单</div>';
+    motion.listContent(list, '<div class="empty">暂无最近播放歌单</div>');
     return;
   }
   
@@ -1703,16 +1875,16 @@ function renderHistory() {
         <img class="item-cover" src="${safeCover}" alt="" referrerpolicy="no-referrer" loading="lazy">
         <div class="item-info">
           <div class="item-name">${safeName}</div>
-          <div class="item-meta">最近播放 ${playedAtText} • 播放 ${playCount} 次 • ID: ${safePlaylistId}</div>
+          <div class="item-meta">最近播放 ${playedAtText} · 播放 ${playCount} 次 · ID: ${safePlaylistId}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safePlaylistId}')">获取链接</button>
+          <button class="btn btn-primary" onclick="playFavorite('${safePlaylistId}')">获取链接</button>
         </div>
       </div>
     `;
   }).join('');
 
-  list.innerHTML = items;
+  motion.listContent(list, items);
 }
 
 async function updateFavoriteBtn() {
@@ -1903,7 +2075,7 @@ function renderAllPlaylists() {
   playlistTotal = all.length;
 
   if (all.length === 0) {
-    list.innerHTML = '<div class="empty">暂无歌单</div>';
+    motion.listContent(list, '<div class="empty">暂无歌单</div>');
     document.getElementById('playlistsPagination').innerHTML = '';
     return;
   }
@@ -1929,12 +2101,12 @@ function renderAllPlaylists() {
           <div class="item-meta">${badge} ${count}首 · ID: ${safeId}</div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="playFavorite('${safeId}', ${platform})">生成</button>
+          <button class="btn btn-primary" onclick="playFavorite('${safeId}', ${platform})">生成</button>
         </div>
       </div>
     `;
   }).join('');
 
-  list.innerHTML = items;
+  motion.listContent(list, items);
   renderPagination('playlistsPagination', playlistTotal, playlistPage, PAGE_SIZE, 'loadAllPlaylists');
 }

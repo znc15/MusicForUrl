@@ -1,30 +1,24 @@
-<!-- 首页内容：由 SPA 动态注入到 #appView -->
-<!-- Platform Tabs -->
-<div class="platform-tabs">
-  <button class="platform-tab active" id="platformNetease" onclick="switchPlatform('netease')">网易云音乐</button>
-  <button class="platform-tab" id="platformQQ" onclick="switchPlatform('qq')">QQ音乐</button>
-</div>
-
-<!-- Input Section -->
-<div class="input-section">
-  <div class="input-group">
-    <input type="text" id="playlistInput" placeholder="粘贴网易云歌单链接或ID">
-    <button class="btn btn-primary" id="generateBtn" onclick="generatePlaylist()">生成</button>
-  </div>
-</div>
-
-<!-- Result Section -->
-<div class="result-section" id="resultSection">
-  <div class="playlist-info">
-    <img class="playlist-cover" id="playlistCover" src="/placeholder.svg" alt="" referrerpolicy="no-referrer">
-    <div>
-      <div class="playlist-name" id="playlistName"></div>
-      <div class="playlist-meta" id="playlistMeta"></div>
+<div class="page-heading"><div><p class="page-eyebrow">MUSIC LINKS</p><h1>链接生成</h1></div><a href="/user" class="btn btn-ghost">我的歌单 <span aria-hidden="true">↗</span></a></div>
+<section class="input-section glass" aria-label="生成播放链接">
+  <form id="playlistForm" onsubmit="event.preventDefault(); generatePlaylist()" novalidate>
+    <div class="platform-tabs" data-motion-tabs role="group" aria-label="音乐平台">
+      <button type="button" class="platform-tab active" id="platformNetease" aria-pressed="true" onclick="switchPlatform('netease')"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13M9 18c0 2-2 3-4 3s-3-1-3-2 2-3 4-3 3 1 3 2Zm11-2c0 2-2 3-4 3s-3-1-3-2 2-3 4-3 3 1 3 2Z"/></svg>网易云音乐</button>
+      <button type="button" class="platform-tab" id="platformQQ" aria-pressed="false" onclick="switchPlatform('qq')"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13M9 18c0 2-2 3-4 3s-3-1-3-2 2-3 4-3 3 1 3 2Zm11-2c0 2-2 3-4 3s-3-1-3-2 2-3 4-3 3 1 3 2Z"/></svg>QQ 音乐</button>
     </div>
-  </div>
-  <div class="url-options" id="playlistUrlOptions"></div>
-  <div class="action-buttons">
-    <button class="btn btn-primary" onclick="copyUrl()">复制链接</button>
-    <button class="btn btn-ghost" id="favoriteBtn">收藏</button>
-  </div>
+    <label class="sr-only" for="playlistInput">歌单链接或 ID</label>
+    <div class="input-group">
+      <div class="playlist-input-wrap"><svg class="icon input-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 6-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg><input type="text" id="playlistInput" placeholder="粘贴网易云歌单链接或 ID" autocomplete="off" spellcheck="false" aria-describedby="generatorFeedback"></div>
+      <button type="submit" class="btn btn-primary generate-btn" id="generateBtn">生成</button>
+    </div>
+    <p class="generator-feedback" id="generatorFeedback" role="status" aria-live="polite" hidden></p>
+  </form>
+</section>
+<section class="result-section glass" id="resultSection" aria-labelledby="playlistName" aria-live="polite">
+  <div class="playlist-info"><img class="playlist-cover" id="playlistCover" src="/placeholder.svg" alt="歌单封面" referrerpolicy="no-referrer"><div><h2 class="playlist-name" id="playlistName"></h2><div class="playlist-meta" id="playlistMeta"></div></div></div>
+  <div class="url-options" id="playlistUrlOptions" role="group" aria-label="播放链接格式"></div>
+  <div class="action-buttons"><button type="button" class="btn btn-primary" onclick="copyUrl()"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>复制链接</button><button type="button" class="btn btn-ghost" onclick="MfuWorkspace.previewGenerated()">预览播放</button><button type="button" class="btn btn-ghost" id="favoriteBtn">收藏</button></div>
+</section>
+<div class="home-shortcuts">
+  <a href="/preview" class="shortcut-card glass"><span class="shortcut-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="4"/><path d="m10 8 6 4-6 4Z"/></svg></span><div><h2>视频预览</h2><p>打开媒体链接或本地文件</p></div><span aria-hidden="true">↗</span></a>
+  <a href="/accounts" class="shortcut-card glass"><span class="shortcut-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></span><div><h2>账号管理</h2><p>网易云音乐 · QQ 音乐</p></div><span aria-hidden="true">↗</span></a>
 </div>

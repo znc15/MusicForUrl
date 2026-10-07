@@ -1,0 +1,18 @@
+<div class="page-heading"><div><p class="page-eyebrow">MEDIA PREVIEW</p><h1>视频预览</h1></div><span class="subtle-badge" id="previewStateBadge">未加载</span></div>
+<section class="preview-card glass" aria-label="媒体预览播放器">
+  <form id="previewForm" class="preview-source-form">
+    <label for="previewUrl">媒体链接</label>
+    <div class="input-group"><div class="playlist-input-wrap"><svg class="icon input-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 6-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg><input type="url" id="previewUrl" placeholder="https://… / video.mp4 或 stream.m3u8" autocomplete="off" spellcheck="false" required aria-describedby="previewStatus"></div><button class="btn btn-primary" type="submit">打开链接</button></div>
+  </form>
+  <div class="preview-source-actions"><label class="btn btn-ghost file-picker" for="previewFile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v11H4ZM4 7V4h7l2 3h7v2"/></svg>选择本地文件<input class="sr-only" type="file" id="previewFile" accept="video/*,audio/*,.mp4,.webm,.mp3,.m4a,.ogg,.wav"></label><button type="button" class="btn btn-ghost" id="previewGenerated" disabled>预览刚生成的歌单</button></div>
+  <div class="preview-screen" id="previewScreen">
+    <video id="previewVideo" controls playsinline preload="metadata" hidden aria-label="媒体播放器"></video>
+    <div class="preview-empty" id="previewEmpty">
+      <span class="preview-play-mark"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 11 7-11 7Z"/></svg></span>
+      <h2>打开视频或音频</h2><p>MP4 · WebM · M3U8 · MP3</p>
+    </div>
+    <div class="preview-audio-art" id="previewAudioArt" hidden aria-hidden="true"><span class="audio-orbit"><svg viewBox="0 0 24 24"><path d="M5 10v4m5-9v14m5-11v8m5-5v2"/></svg></span><span>音频预览</span></div>
+  </div>
+  <div class="preview-meta"><div><h2 id="previewTitle">尚未选择媒体</h2><p id="previewStatus" role="status" aria-live="polite">选择本地文件，或打开可播放的媒体直链。</p></div><button class="btn btn-ghost compact-btn" type="button" id="previewClear" disabled>清空</button></div>
+</section>
+<p class="view-footnote">本地文件不上传；HLS 直链需允许跨域访问。本站歌单为纯音频。</p>

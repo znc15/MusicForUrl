@@ -4,82 +4,36 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>个人中心 - MusicForUrl</title>
+  <meta name="description" content="网易云音乐与 QQ 音乐歌单转换为播放链接。">
+  <meta name="theme-color" content="#e5f6ff">
+  <link rel="icon" href="/brand.svg" type="image/svg+xml">
+  <script>try { if (localStorage.getItem('theme') === 'dark') document.documentElement.dataset.theme = 'dark'; } catch (_) {}</script>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/pagination.css">
 </head>
 <body>
-  <div class="container">
+  <div class="container app-shell">
     <div id="header-placeholder"></div>
-
-    <main>
-      <div class="view-header">
-        <a href="/" class="btn-back">← 返回首页</a>
-        <h2>个人中心</h2>
+    <div class="workspace">
+      <header class="workspace-bar">
+        <div class="workspace-location"><span>工作台</span><span aria-hidden="true">/</span><strong id="workspaceLocation">我的音乐</strong></div>
+        <label class="theme-switch" title="切换深色模式"><input type="checkbox" id="themeToggle" onchange="toggleTheme()" aria-label="深色模式"><span class="theme-icon"><svg class="icon moon-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.2A8 8 0 0 1 9.8 4a8.2 8.2 0 1 0 10.4 10.2Z"/></svg><svg class="icon sun-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></span></label>
+      </header>
+      <main id="appView" tabindex="-1">
+      <div style="text-align:center; padding: 2rem;">
+        <span class="loading"></span>
       </div>
-
-      <div class="personal-center">
-        <div class="profile-platform-tabs">
-          <button class="profile-platform-tab active" id="personalPlatformNetease" onclick="switchPersonalPlatform('netease')">网易云个人中心</button>
-          <button class="profile-platform-tab" id="personalPlatformQQ" onclick="switchPersonalPlatform('qq')">QQ音乐个人中心</button>
-        </div>
-
-        <section id="neteasePanel" class="platform-panel active">
-          <div id="neteaseAuthState" class="platform-auth-state"></div>
-          <div id="neteaseContent">
-            <div class="tabs">
-              <button class="tab-btn active" id="tabPlaylists" onclick="switchPersonalTab('playlists')">我的歌单</button>
-              <button class="tab-btn" id="tabFavorites" onclick="switchPersonalTab('favorites')">我的收藏</button>
-              <button class="tab-btn" id="tabHistory" onclick="switchPersonalTab('history')">最近播放</button>
-            </div>
-            
-            <div id="playlistsContent" class="tab-content active">
-              <div id="playlistsList"></div>
-              <div id="playlistsPagination" class="pagination"></div>
-            </div>
-
-            <div id="favoritesContent" class="tab-content">
-              <div id="favoritesList"></div>
-              <div id="favoritesPagination" class="pagination"></div>
-            </div>
-            
-            <div id="historyContent" class="tab-content">
-               <div id="historyList"></div>
-               <div id="historyPagination" class="pagination"></div>
-            </div>
-          </div>
-        </section>
-
-        <section id="qqPanel" class="platform-panel">
-          <div id="qqAuthState" class="platform-auth-state"></div>
-          <div id="qqContent">
-            <div class="tabs">
-              <button class="tab-btn-lite active" id="tabQQPlaylists" onclick="switchQQPersonalTab('playlists')">我的歌单</button>
-              <button class="tab-btn-lite" id="tabQQFavorites" onclick="switchQQPersonalTab('favorites')">我的收藏</button>
-              <button class="tab-btn-lite" id="tabQQHistory" onclick="switchQQPersonalTab('history')">最近播放</button>
-            </div>
-            <div id="qqPlaylistsContent" class="qq-tab-content active">
-              <div id="qqPlaylistsList"></div>
-              <div id="qqPlaylistsPagination" class="pagination"></div>
-            </div>
-            <div id="qqFavoritesContent" class="qq-tab-content">
-              <div id="qqFavoritesList"></div>
-              <div id="qqFavoritesPagination" class="pagination"></div>
-            </div>
-            <div id="qqHistoryContent" class="qq-tab-content">
-              <div id="qqHistoryList"></div>
-              <div id="qqHistoryPagination" class="pagination"></div>
-            </div>
-          </div>
-        </section>
-      </div>
-    </main>
+      </main>
+    </div>
   </div>
 
   <div id="footer-placeholder"></div>
 
   <script src="/js/toast.js"></script>
   <script src="/js/error-utils.js"></script>
+  <script src="/js/vendor/gsap-3.15.0.min.js"></script>
+  <script src="/js/motion.js"></script>
+  <script src="/js/workspace.js"></script>
   <script src="/js/main.js"></script>
-  <script src="/js/user.js"></script>
 </body>
 </html>

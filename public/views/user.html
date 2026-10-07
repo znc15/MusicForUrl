@@ -1,24 +1,23 @@
 <!-- 个人中心内容：由 SPA 动态注入到 #appView -->
-<div class="view-header">
-  <a href="/" class="btn-back">← 返回首页</a>
-  <h2>个人中心</h2>
-</div>
+<div class="page-heading"><div><p class="page-eyebrow">LIBRARY</p><h1>我的音乐</h1></div><a href="/accounts" class="btn btn-ghost">管理账号</a></div>
 
-<div class="personal-center">
-  <div class="profile-platform-tabs">
-    <button class="profile-platform-tab active" id="personalPlatformNetease" onclick="switchPersonalPlatform('netease')">网易云个人中心</button>
-    <button class="profile-platform-tab" id="personalPlatformQQ" onclick="switchPersonalPlatform('qq')">QQ音乐个人中心</button>
+<div class="personal-center glass">
+  <div class="profile-platform-tabs" data-motion-tabs role="group" aria-label="个人中心平台">
+    <button class="profile-platform-tab active" id="personalPlatformNetease" aria-pressed="true" onclick="switchPersonalPlatform('netease')">网易云音乐</button>
+    <button class="profile-platform-tab" id="personalPlatformQQ" aria-pressed="false" onclick="switchPersonalPlatform('qq')">QQ 音乐</button>
   </div>
 
+  <div class="motion-panels">
   <section id="neteasePanel" class="platform-panel active">
     <div id="neteaseAuthState" class="platform-auth-state"></div>
     <div id="neteaseContent">
-      <div class="tabs">
+      <div class="tabs" data-motion-tabs role="group" aria-label="网易云内容">
         <button class="tab-btn active" id="tabPlaylists" onclick="switchPersonalTab('playlists')">我的歌单</button>
         <button class="tab-btn" id="tabFavorites" onclick="switchPersonalTab('favorites')">我的收藏</button>
         <button class="tab-btn" id="tabHistory" onclick="switchPersonalTab('history')">最近播放</button>
       </div>
 
+      <div class="motion-panels collection-panels">
       <div id="playlistsContent" class="tab-content active">
         <div id="playlistsList"></div>
         <div id="playlistsPagination" class="pagination"></div>
@@ -33,17 +32,19 @@
          <div id="historyList"></div>
          <div id="historyPagination" class="pagination"></div>
       </div>
+      </div>
     </div>
   </section>
 
   <section id="qqPanel" class="platform-panel">
     <div id="qqAuthState" class="platform-auth-state"></div>
     <div id="qqContent">
-      <div class="tabs">
+      <div class="tabs" data-motion-tabs role="group" aria-label="QQ 音乐内容">
         <button class="tab-btn-lite active" id="tabQQPlaylists" onclick="switchQQPersonalTab('playlists')">我的歌单</button>
         <button class="tab-btn-lite" id="tabQQFavorites" onclick="switchQQPersonalTab('favorites')">我的收藏</button>
         <button class="tab-btn-lite" id="tabQQHistory" onclick="switchQQPersonalTab('history')">最近播放</button>
       </div>
+      <div class="motion-panels collection-panels">
       <div id="qqPlaylistsContent" class="qq-tab-content active">
         <div id="qqPlaylistsList"></div>
         <div id="qqPlaylistsPagination" class="pagination"></div>
@@ -56,6 +57,8 @@
         <div id="qqHistoryList"></div>
         <div id="qqHistoryPagination" class="pagination"></div>
       </div>
+      </div>
     </div>
   </section>
+  </div>
 </div>

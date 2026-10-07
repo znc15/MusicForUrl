@@ -6,8 +6,8 @@ services:
       args:
         # 可选：基础镜像（用于无法访问 Docker Hub 时切换到可用镜像源）
         # 示例（按你网络可用的镜像改）：
-        # NODE_IMAGE: registry.cn-hangzhou.aliyuncs.com/library/node:20-alpine
-        NODE_IMAGE: ${NODE_IMAGE:-node:20-alpine}
+        # NODE_IMAGE: registry.cn-hangzhou.aliyuncs.com/library/node:24-alpine
+        NODE_IMAGE: ${NODE_IMAGE:-node:24-alpine}
         # 可选：Alpine 仓库镜像（不带协议），例如 mirrors.aliyun.com/alpine
         ALPINE_REPO_MIRROR: ${ALPINE_REPO_MIRROR:-}
         # 可选：npm 镜像，例如 https://registry.npmmirror.com

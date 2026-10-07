@@ -79,6 +79,18 @@ test('health endpoint returns ok status', async (t) => {
     assert.equal(body.status, 'ok');
     assert.equal(typeof body.timestamp, 'number');
     assert.equal(stderr.includes('Error:'), false);
+
+    const page = await fetch(`http://127.0.0.1:${port}/`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('content-type') || '', /text\/html/);
+
+    const fallback = await fetch(`http://127.0.0.1:${port}/missing-page`);
+    assert.equal(fallback.status, 200);
+    assert.match(fallback.headers.get('content-type') || '', /text\/html/);
+
+    const missingApi = await fetch(`http://127.0.0.1:${port}/api/missing`);
+    assert.equal(missingApi.status, 404);
+    assert.equal((await missingApi.json()).success, false);
   } finally {
     if (!child.killed) child.kill('SIGTERM');
     await new Promise((resolve) => {
