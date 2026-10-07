@@ -63,3 +63,6 @@ CREATE TABLE IF NOT EXISTS play_logs (
   played_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS play_logs_user_playlist_time_idx ON play_logs(user_id, playlist_id, played_at_ms DESC);
+CREATE INDEX IF NOT EXISTS play_logs_user_song_time_idx ON play_logs(user_id, playlist_id, song_id, played_at_ms DESC);
+CREATE INDEX IF NOT EXISTS play_logs_user_time_idx ON play_logs(user_id, played_at_ms DESC, id DESC);
+CREATE INDEX IF NOT EXISTS play_logs_time_idx ON play_logs(played_at_ms);

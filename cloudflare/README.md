@@ -41,6 +41,23 @@ VRChat 的具体播放能力仍取决于播放器后端。公开／群组公开�
 
 网易云播放地址优先使用新版 `song_url_v1` 接口；若未返回可播放地址，会回退到原码率接口。`MUSIC_QUALITY=medium` 保留原有 192 kbps 接口，因为新版没有对应的 192 kbps 档位。
 
+Cloudflare 仅支持 `MUSIC_QUALITY=low/medium/high` 的 MP3 音质。旧配置 `lossless` 自动映射为 `high`，网易云使用 `exhigh`（回退接口为 320 kbps），QQ 音乐使用 `M800...mp3`；不会请求 FLAC。QQ 音质显式使用 Worker 配置，原 Node.js 服务仍可使用自身的无损设置。
+
+### 登录认证与请求体限制
+
+网易云登录令牌仅从 `x-token` 请求头读取，QQ 音乐仅从 `x-qq-token` 读取；URL 查询参数 `token` / `qqtoken` 不参与登录认证或退出登录。退出接口保留 JSON 请求体中的显式令牌兼容方式。播放链接仍使用独立的签名令牌。
+
+JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-Length`。流式或分块请求超过上限会被取消并返回 HTTP 413。
+
+### 播放历史与保留
+
+- HLS 音频分片完整读取后才计入；HEAD、传输失败和主动取消不计入。直链模式在成功返回音频地址时计入。这些记录不代表已经完整收听。
+- 同一账号、歌单和歌曲在 5 分钟内的重复请求合并为一条；每个账号每分钟最多新增 12 条，超过时仍可播放。
+- 每个账号保留最近 30 天、最多 1,000 条。写入时使用 D1 batch 事务，去重和限额判断在 INSERT 中执行；同时清理该账号过期和超量记录。
+- 最近播放和热门歌曲统计只读取 30 天内保留的记录。每天 UTC 03:17 的 Cron 全站清理过期记录，包括近期未播放的账号。
+
+现有部署升级时先运行 `npm run db:remote` 添加日志索引，再运行 `npm run deploy` 发布新代码和 Cron。`schema.sql` 可重复执行，不清空账号、歌单或收藏。D1 事务和定时任务参考 [D1 batch 文档](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)与 [Cron Triggers 文档](https://developers.cloudflare.com/workers/configuration/cron-triggers/)。
+
 ## 工作台界面
 
 左侧导航统一提供链接生成、我的音乐、视频预览、账号管理和关于页面。窄屏显示紧凑导航；页面、面板与导航指示器继续由 GSAP 统一控制，并响应系统的减少动态效果设置。

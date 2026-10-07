@@ -1,6 +1,7 @@
 import CryptoJS from 'crypto-js';
 import forge from 'node-forge';
 import QRCode from 'qrcode';
+import { mp3Quality } from './audio-quality.js';
 
 const API_DOMAIN = 'https://interface.music.163.com';
 const WEB_DOMAIN = 'https://music.163.com';
@@ -215,11 +216,10 @@ const QUALITY_LEVELS = {
   low: { level: 'standard', bitrate: 128000 },
   medium: { level: null, bitrate: 192000 },
   high: { level: 'exhigh', bitrate: 320000 },
-  lossless: { level: 'lossless', bitrate: 999000 },
 };
 
 async function getSongUrl(songId, cookie, env) {
-  const quality = String(env.MUSIC_QUALITY || 'low').toLowerCase();
+  const quality = mp3Quality(env.MUSIC_QUALITY);
   const selected = QUALITY_LEVELS[quality] || QUALITY_LEVELS.low;
   const ids = JSON.stringify([String(songId)]);
   if (selected.level) {

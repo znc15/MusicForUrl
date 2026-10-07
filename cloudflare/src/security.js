@@ -95,13 +95,12 @@ async function createSession(env, platform, profile, cookie) {
   return { token, userId: row.id };
 }
 
-function sessionToken(request, platform, url) {
-  return request.headers.get(platform === 'qq' ? 'x-qq-token' : 'x-token') ||
-    url.searchParams.get(platform === 'qq' ? 'qqtoken' : 'token') || '';
+function sessionToken(request, platform) {
+  return request.headers.get(platform === 'qq' ? 'x-qq-token' : 'x-token') || '';
 }
 
 async function getSessionUser(env, request, platform, url) {
-  const token = sessionToken(request, platform, url);
+  const token = sessionToken(request, platform);
   if (!token || token.length > 256) return null;
   const tokenHash = await sha256Hex(token);
   return env.DB.prepare(`
@@ -111,7 +110,7 @@ async function getSessionUser(env, request, platform, url) {
 }
 
 async function logout(env, request, platform, url, body) {
-  const token = sessionToken(request, platform, url) ||
+  const token = sessionToken(request, platform) ||
     (platform === 'qq' ? body?.qqtoken : body?.token) || '';
   if (!token || token.length > 256) return;
   const tokenHash = await sha256Hex(token);

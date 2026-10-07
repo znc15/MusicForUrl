@@ -82,6 +82,19 @@ test('audio redirects cannot leave the platform CDN allowlist', async () => {
   assert.equal(calls.length, 1);
 });
 
+test('a failed audio stream never calls the playback completion hook', async () => {
+  let completed = 0;
+  let sent = false;
+  const response = await packedAudioResponse(request(), mediaUrl, 'netease', () => new Response(new ReadableStream({
+    pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(media); }
+      else controller.error(new Error('fixture download failed'));
+    },
+  })), () => { completed++; });
+  await assert.rejects(response.arrayBuffer(), /fixture download failed/);
+  assert.equal(completed, 0);
+});
+
 test('unsupported media and unavailable tracks are reported as errors instead of mislabeled MP3 segments', async () => {
   const unsupported = await packedAudioResponse(request(), mediaUrl, 'netease', () => new Response('fLaCdata'));
   assert.equal(unsupported.status, 415);

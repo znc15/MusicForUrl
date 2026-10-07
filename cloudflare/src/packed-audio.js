@@ -57,7 +57,7 @@ function audioError(message, status) {
   } });
 }
 
-async function packedAudioResponse(request, destination, platform, fetchImpl = fetch) {
+async function packedAudioResponse(request, destination, platform, fetchImpl = fetch, onComplete = () => {}) {
   const head = request.method === 'HEAD';
   const upstream = await fetchAudio(destination, platform, head, fetchImpl);
   if (!upstream?.ok || !upstream.body) {
@@ -105,7 +105,7 @@ async function packedAudioResponse(request, destination, platform, fetchImpl = f
     async pull(controller) {
       try {
         const chunk = await reader.read();
-        if (chunk.done) { reader.releaseLock(); controller.close(); }
+        if (chunk.done) { reader.releaseLock(); controller.close(); onComplete(); }
         else controller.enqueue(chunk.value);
       } catch (error) { controller.error(error); }
     },

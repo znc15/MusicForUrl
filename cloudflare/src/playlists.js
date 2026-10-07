@@ -1,6 +1,7 @@
 import qqmusic from '../../lib/qqmusic.js';
 import * as netease from './netease.js';
 import { decryptCookie } from './security.js';
+import { mp3Quality } from './audio-quality.js';
 
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 
@@ -139,7 +140,7 @@ function allowedAudioUrl(rawUrl, platform) {
 async function songUrl(env, user, songId) {
   const cookie = await decryptCookie(env, user);
   const url = user.platform === 'qq'
-    ? await qqmusic.getSongUrl(songId, cookie)
+    ? await qqmusic.getSongUrl(songId, cookie, mp3Quality(env.MUSIC_QUALITY))
     : await netease.getSongUrl(songId, cookie, env);
   return allowedAudioUrl(url, user.platform);
 }

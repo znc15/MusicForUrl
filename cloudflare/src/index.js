@@ -1,6 +1,7 @@
 import qqmusic from '../../lib/qqmusic.js';
 import * as netease from './netease.js';
 import { packedAudioResponse } from './packed-audio.js';
+import { PLAY_LOG_RETENTION_MS, prunePlaybackLogs, recordPlayback } from './playback-history.js';
 import {
   createPlaybackToken, createSession, decryptCookie, getPlaybackUser, getSessionUser,
   logout, requireSecret, sha256Hex,
@@ -11,6 +12,9 @@ import {
 } from './playlists.js';
 
 const QR_TTL_MS = 3 * 60 * 1000;
+const MAX_REQUEST_BODY_BYTES = 65536;
+
+class RequestBodyTooLargeError extends Error {}
 
 function json(body, status = 200, extraHeaders = {}) {
   return Response.json(body, {
@@ -34,9 +38,30 @@ function numberParam(value, fallback, max) {
 
 async function bodyJson(request) {
   const length = Number(request.headers.get('content-length'));
-  if (length > 65536) throw new Error('Request body too large');
+  if (length > MAX_REQUEST_BODY_BYTES) {
+    await request.body?.cancel();
+    throw new RequestBodyTooLargeError();
+  }
+  if (!request.body) return {};
+  const reader = request.body.getReader();
+  const bytes = new Uint8Array(MAX_REQUEST_BODY_BYTES);
+  let bytesRead = 0;
   try {
-    const value = await request.json();
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (bytesRead + chunk.value.byteLength > MAX_REQUEST_BODY_BYTES) {
+        await reader.cancel();
+        throw new RequestBodyTooLargeError();
+      }
+      bytes.set(chunk.value, bytesRead);
+      bytesRead += chunk.value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes.subarray(0, bytesRead)));
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   } catch (_) {
     return {};
@@ -268,19 +293,18 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
     if (!song) return fail('歌曲不属于该歌单', 403);
     const destination = await songUrl(env, user, songId);
     if (!destination) return fail('歌曲不可播放，可能无版权或需要对应会员权限', 404);
-    const response = url.searchParams.get('hls') === '1'
-      ? await packedAudioResponse(request, destination, platform)
-      : new Response(null, { status: 302, headers: {
-        location: destination,
-        'cache-control': 'no-store',
-        'access-control-allow-origin': '*',
-      } });
-    if (request.method === 'GET' && response.status < 400) {
-      ctx.waitUntil(env.DB.prepare(`
-        INSERT INTO play_logs (user_id, playlist_id, song_id, song_name, artist, played_at_ms)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(user.id, playlistId, songId, song.name, song.artist, Date.now()).run());
+    const record = () => ctx.waitUntil(recordPlayback(env, user.id, playlistId, song)
+      .catch(error => console.error('[Playback history]', error)));
+    if (url.searchParams.get('hls') === '1') {
+      return packedAudioResponse(request, destination, platform, fetch,
+        request.method === 'GET' ? record : undefined);
     }
+    const response = new Response(null, { status: 302, headers: {
+      location: destination,
+      'cache-control': 'no-store',
+      'access-control-allow-origin': '*',
+    } });
+    if (request.method === 'GET') record();
     return response;
   }
 
@@ -349,6 +373,7 @@ async function historyRoute(request, env, platform, path, url) {
   const user = await requireUser(env, request, platform, url);
   if (!user) return fail('请先登录', 401);
   if (request.method !== 'GET') return fail('接口不存在', 404);
+  const cutoff = Date.now() - PLAY_LOG_RETENTION_MS;
 
   if (path === '/recent') {
     const limit = numberParam(url.searchParams.get('limit'), 20, 100) || 20;
@@ -359,13 +384,13 @@ async function historyRoute(request, env, platform, path, url) {
         COALESCE(MAX(p.cover), '') AS playlist_cover
       FROM play_logs l LEFT JOIN playlists p
         ON p.user_id = l.user_id AND p.playlist_id = l.playlist_id
-      WHERE l.user_id = ? AND l.playlist_id IS NOT NULL
+      WHERE l.user_id = ? AND l.playlist_id IS NOT NULL AND l.played_at_ms >= ?
       GROUP BY l.playlist_id ORDER BY played_at_ms DESC LIMIT ? OFFSET ?
-    `).bind(user.id, limit, offset).all();
+    `).bind(user.id, cutoff, limit, offset).all();
     const count = await env.DB.prepare(`
       SELECT COUNT(DISTINCT playlist_id) AS total FROM play_logs
-      WHERE user_id = ? AND playlist_id IS NOT NULL
-    `).bind(user.id).first();
+      WHERE user_id = ? AND playlist_id IS NOT NULL AND played_at_ms >= ?
+    `).bind(user.id, cutoff).first();
     return json({ success: true, data: rows.results.map((row) => ({
       playlistId: row.playlist_id,
       name: row.playlist_name || `歌单 ${row.playlist_id}`,
@@ -379,9 +404,9 @@ async function historyRoute(request, env, platform, path, url) {
     const limit = numberParam(url.searchParams.get('limit'), 10, 50) || 10;
     const rows = await env.DB.prepare(`
       SELECT song_id, MAX(song_name) AS song_name, MAX(artist) AS artist,
-        COUNT(*) AS play_count FROM play_logs WHERE user_id = ?
+        COUNT(*) AS play_count FROM play_logs WHERE user_id = ? AND played_at_ms >= ?
       GROUP BY song_id ORDER BY play_count DESC LIMIT ?
-    `).bind(user.id, limit).all();
+    `).bind(user.id, cutoff, limit).all();
     return json({ success: true, data: rows.results.map((row) => ({
       songId: row.song_id, songName: row.song_name, artist: row.artist, playCount: row.play_count,
     })) });
@@ -420,12 +445,16 @@ async function api(request, env, ctx) {
 }
 
 export default {
+  scheduled(_event, env, ctx) {
+    ctx.waitUntil(prunePlaybackLogs(env));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     try {
       return await api(request, env, ctx);
     } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) return fail('请求体不能超过 64 KiB', 413);
       console.error('[API]', error);
       return fail('请求处理失败，请稍后重试', 500);
     }

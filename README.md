@@ -33,6 +33,8 @@
 
 本地文件仅通过浏览器 Object URL 预览，不上传到服务器。M3U8 优先使用本站打包的 Hls.js；不支持 MediaSource 的浏览器尝试原生 HLS。外部 HLS 源必须允许跨域请求。
 
+最近播放按有效媒体请求记录：HLS 分片完整传输后计入，直链模式在返回播放地址后计入；不代表已经完整收听。相同账号、歌单和歌曲在 5 分钟内合并，每个账号每分钟最多新增 12 条，保留最近 30 天且最多 1,000 条。后台每天清理过期数据，详见[播放历史说明](cloudflare/README.md#播放历史与保留)。
+
 ## 播放与兼容性
 
 Cloudflare 版本输出 **MP3 Packed Audio M3U8**：Worker 为音频添加 ID3 时间戳，并通过本站域名流式提供。每首歌作为一个完整片段，相邻歌曲使用 `EXT-X-DISCONTINUITY`；不进行 FFmpeg 转码，也不生成视频画面。实现细节见 [Cloudflare 文档](cloudflare/README.md#功能边界)与 [RFC 8216 第 3.4 节](https://www.rfc-editor.org/rfc/rfc8216.html#section-3.4)。
@@ -74,7 +76,7 @@ npm run dev
 npm test
 ```
 
-测试覆盖 Worker 认证与账号隔离、网易云播放接口、Packed Audio，以及工作台 URL 校验和账号偏好。
+测试覆盖 Worker 认证与账号隔离、流式请求体限制、双平台 MP3 音质、播放记录去重与保留、Packed Audio，以及工作台 URL 校验和账号偏好。
 
 ## 部署到 Cloudflare
 
@@ -126,6 +128,8 @@ npm run deploy
 
 该命令自动构建静态依赖，并保留已有 Secret。部署后检查 `/api/health`，再验证登录、生成链接和预览播放。
 
+升级到包含播放日志限制的版本时，先执行一次 `npm run db:remote` 添加索引，再执行 `npm run deploy`。表结构脚本可重复执行，不会清空账号或收藏。`wrangler.jsonc` 中的 Cron 每天 UTC 03:17 清理过期播放记录。
+
 ### 3. 可选配置与自定义域名
 
 | 配置 | 用途 | 默认值 |
@@ -134,7 +138,7 @@ npm run deploy
 | `TOKEN_TTL_HOURS` | 登录令牌有效期 | 168 小时 |
 | `PLAYBACK_TOKEN_TTL_SECONDS` | 播放链接有效期 | 86400 秒，上限 172800 秒 |
 | `CACHE_TTL` | 歌单缓存有效期 | 86400 秒 |
-| `MUSIC_QUALITY` | `low / medium / high / lossless` 音质选择 | `low`；实际结果受账号与上游接口限制 |
+| `MUSIC_QUALITY` | `low / medium / high` MP3 音质选择 | `low`；旧配置 `lossless` 自动使用 `high`，实际结果受账号与上游接口限制 |
 
 自定义域名可配置为 Worker Custom Domain 或 Worker Route。当前在线站点的 Cloudflare for SaaS、DNS 优选和回退配置见[站点部署记录](cloudflare/README.md#域名证书和优选入口)，这些记录仅供参考；优选目标的可用性和访问效果会随网络变化。
 
