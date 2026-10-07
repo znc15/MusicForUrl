@@ -363,7 +363,10 @@
     const names = ['--bg', '--card-bg', '--surface-alt', '--card-border', '--text', '--text-dim',
       '--accent-hover', '--accent-light', '--accent-text', '--danger', '--btn-text', '--glass-fill',
       '--glass-edge', '--glass-highlight', '--glass-sheen', '--control-fill', '--ambient-glow'];
-    const read = () => Object.fromEntries(names.map(name => [name, getComputedStyle(root).getPropertyValue(name).trim()]));
+    // GSAP parses percentage alpha as an unscaled number; normalize CSS Color 4 inputs.
+    const colors = value => value.replace(/rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\/\s*([\d.]+)%\s*\)/g,
+      (_, r, g, b, alpha) => `rgba(${r},${g},${b},${Number(alpha) / 100})`);
+    const read = () => Object.fromEntries(names.map(name => [name, colors(getComputedStyle(root).getPropertyValue(name).trim())]));
     const before = read(), background = getComputedStyle(body).backgroundImage;
     stop(root);
     apply();
