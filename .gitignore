@@ -316,3 +316,7 @@ core.*
 
 # Editor lock files
 .~lock.*
+
+# Repository maintenance rules and local browser audit artifacts
+!/AGENTS.md
+/.playwright-mcp/

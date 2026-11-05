@@ -20,12 +20,12 @@ features:
     details: 歌单、收藏、最近播放与账号管理集中在侧边栏中。
     link: /guide/start
   - title: 音质可见，也可选择
-    details: 标准、较高和高品质 MP3；自有服务器支持可用的原生 FLAC。权限和格式限制会明确提示。
+    details: 标准、较高和高品质 MP3，播放时展示实际格式与码率。
     link: /guide/quality
   - title: 音乐与封面同时呈现
     details: 逐首队列、下一首解析预取、独立封面层，以及自然的亮暗切换。
     link: /guide/performance
-  - title: 云端或自己的服务器
-    details: Workers + D1 + 私有 R2，或 Node.js + SQLite。使用同一套播放器接口。
+  - title: Cloudflare 云端部署
+    details: Workers + D1，按需启用私有 R2 缓存；前端与 API 由同一 Worker 提供。
     link: /guide/deployment
 ---

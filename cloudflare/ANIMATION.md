@@ -1,6 +1,6 @@
 # 界面动画
 
-Cloudflare 版前端是 **React + Vite**，动画由 **`motion`（framer-motion）** 承担，入口为 `web/src/motion/primitives.tsx` 与 `web/src/main.tsx` 的 `LazyMotion`。旧的 GSAP 实现 `public/js/motion.js` 随冻结的 Node 版前端保留，**不再是本站点的动画入口**。
+Cloudflare 版前端是 **React + Vite**，动画由 **`motion`（framer-motion）** 承担，入口为 `web/src/motion/primitives.tsx` 与 `web/src/main.tsx` 的 `LazyMotion`。旧的 GSAP 前端保存在 `codex/nodejs-frozen` 分支，历史实现见[冻结基线](https://github.com/znc15/MusicForUrl/blob/f3830c4/public/js/motion.js)。
 
 ```tsx
 // web/src/main.tsx
@@ -72,10 +72,12 @@ import { Segmented, ListReveal, ListItem } from '@/motion/primitives';
 前端在 `web/` 目录独立构建，产物 `web/dist` 由 Worker 的 `assets` 绑定提供：
 
 ```sh
-cd web && npm ci && npm run build
-cd ../cloudflare && npm run deploy   # predeploy 会自动先构建 web
+npm --prefix web ci
+npm --prefix cloudflare ci
+npm run build
+npm --prefix cloudflare run deploy   # predeploy 会自动先构建 web
 ```
 
-`hls.js` 由 npm 引入并**按需动态加载**（约 185 kB gzip），只在预览页真正打开 HLS 源时才下载，不进首屏。`cloudflare/scripts/sync-motion.mjs`（`npm run build:vendor`）仍保留，仅用于给冻结的 Node 版前端同步 GSAP 与 Hls.js。
+`hls.js` 由 npm 引入并**按需动态加载**（约 185 kB gzip），只在预览页真正打开 HLS 源时才下载，不进首屏。Cloudflare 分支直接使用前端锁定依赖构建，旧版 vendor 同步脚本随 Node.js 分支冻结。
 
 参考：[Motion 文档](https://motion.dev/docs/react)、[Radix Dialog](https://www.radix-ui.com/primitives/docs/components/dialog)。

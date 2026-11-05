@@ -1,16 +1,20 @@
 {
   "name": "music-for-url",
   "version": "2.1.1",
-  "description": "网易云歌单转VRChat播放链接",
-  "main": "server.js",
+  "description": "多平台歌单转播放链接 · Cloudflare Workers + D1",
+  "private": true,
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch-path=./lib --watch-path=./routes --watch-path=./server.js server.js",
-    "check": "node --check server.js && node --check lib/auth.js && node --check lib/crypto.js && node --check lib/db.js && node --check lib/env-check.js && node --check lib/history.js && node --check lib/lite-video-bg.js && node --check lib/netease.js && node --check lib/playback-token.js && node --check routes/auth.js && node --check routes/favorite.js && node --check routes/history.js && node --check routes/hls.js && node --check routes/img.js && node --check routes/playlist.js && node --check routes/song.js && echo Syntax check passed",
-    "test": "node scripts/test.cjs"
+    "start": "npm --prefix cloudflare run dev",
+    "dev": "npm --prefix cloudflare run dev",
+    "check": "npm --prefix web run check",
+    "test": "node scripts/test.cjs && npm --prefix cloudflare test",
+    "build": "npm --prefix web run build",
+    "build:worker": "npm run build && npm --prefix cloudflare run build:worker",
+    "docs:build": "npm --prefix website run build",
+    "deploy": "npm --prefix cloudflare run deploy"
   },
   "keywords": [
     "netease",
@@ -20,15 +24,5 @@
     "playlist"
   ],
   "author": "",
-  "license": "MIT",
-  "dependencies": {
-    "better-sqlite3": "^12.11.1",
-    "compression": "^1.8.1",
-    "cors": "^2.8.5",
-    "crypto-js": "^4.2.0",
-    "dotenv": "^18.0.5",
-    "express": "^5.2.1",
-    "express-rate-limit": "^8.2.1",
-    "NeteaseCloudMusicApi": "4.32.0"
-  }
+  "license": "MIT"
 }

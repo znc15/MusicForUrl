@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build:assets": "npm --prefix ../web run build",
-    "build:vendor": "node scripts/sync-motion.mjs",
+    "build:worker": "wrangler deploy --dry-run --outdir .wrangler/build",
     "predev": "npm run build:assets",
     "dev": "wrangler dev",
     "predeploy": "npm run build:assets",
@@ -23,8 +23,6 @@
     "qrcode": "1.5.4"
   },
   "devDependencies": {
-    "gsap": "3.15.0",
-    "hls.js": "1.7.3",
     "wrangler": "4.147.0"
   },
   "engines": {

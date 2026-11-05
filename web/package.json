@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "check": "tsc --noEmit",
     "build": "tsc --noEmit && cross-env NODE_ENV=production vite build",
     "preview": "vite preview"
   },

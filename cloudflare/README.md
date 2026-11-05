@@ -1,5 +1,7 @@
 # Cloudflare 免自管服务器版
 
+本指南随 `codex/cloudflare` 维护。Node.js / Docker 代码保存在 `codex/nodejs-frozen`，运行方式见[冻结基线 f3830c4 的原始文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
+
 当前主域名：[https://music.nyasakura.com/](https://music.nyasakura.com/)；根域名 [https://nyasakura.com/](https://nyasakura.com/) 与原 `workers.dev` 地址 [https://music-for-url.miaofile.workers.dev/](https://music-for-url.miaofile.workers.dev/) 暂时保留为回退。配置中的 D1 ID 和 `routes` 属于这个站点；在其他 Cloudflare 账号部署时，需要创建自己的 D1 并替换 ID，删除现有 `routes` 或改成自己的域名。先使用 `workers.dev` 地址即可，无需复制本站 SaaS/DNS 配置。
 
 `music.nyasakura.com` 通过 Cloudflare for SaaS 自定义主机名进入 `music.nyasakura.com/*` Worker Route。根域名仍为 Worker Custom Domain；配置显式保留 `workers_dev` 地址。已启用免费的 Smart Placement 试运行，它会根据流量决定 API Worker 的执行位置；静态资源仍由靠近访客的边缘节点提供。Smart Placement 需要一段时间和来自不同位置的请求才能给出优化结果，不能把启用本身当作速度提升。
@@ -20,7 +22,7 @@
 
 若优选入口出现 403、证书错误或播放失败，可先把 `music` 记录改回 CNAME `2f1343c8-5c9f-40dd-9784-3a0c2afe34e1.cfargotunnel.com` 并开启代理；这是切换前的 Fnos Tunnel 记录。保留 `music.nyasakura.com/*` Worker Route 即可继续由 Worker 响应。回滚后检查 `/api/health`、登录状态、M3U8 和音频请求，再排查 SaaS/DNS。不要改动其他 Tunnel 记录。
 
-这个版本用 **Cloudflare Workers Static Assets + Worker API + D1** 运行 MusicForUrl。网页仍在仓库的 `public/`；登录、歌单解析、签名链接、收藏和播放记录由 Worker 处理，账号 Cookie 经 AES-GCM 加密后存入 D1。无需 VPS、Docker 或常驻 Node 进程。
+这个版本用 **Cloudflare Workers Static Assets + Worker API + D1** 运行 MusicForUrl。网页源码位于 `web/`，构建到 `web/dist`；登录、歌单解析、签名链接、收藏和播放记录由 Worker 处理，账号 Cookie 经 AES-GCM 加密后存入 D1。无需 VPS、Docker 或常驻 Node 进程。
 
 Cloudflare 目前建议新项目使用 Workers Static Assets；若你习惯 Pages，可把它理解为同类的静态资源加边缘函数部署方式。[Cloudflare 官方说明](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/#use-workers-static-assets-for-new-projects)
 
@@ -43,7 +45,7 @@ VRChat / 台 K 播放轻量音频 M3U8 时优先选择 **AVPro / Stream / 流媒
 
 网易云播放地址优先使用新版 `song_url_v1` 接口；若未返回可播放地址，会回退到原码率接口。`MUSIC_QUALITY=medium` 保留原有 192 kbps 接口，因为新版没有对应的 192 kbps 档位。
 
-Cloudflare 仅支持 `MUSIC_QUALITY=low/medium/high` 的 MP3 音质。旧配置 `lossless` 自动映射为 `high`，网易云使用 `exhigh`（回退接口为 320 kbps），QQ 音乐使用 `M800...mp3`；不会请求 FLAC。QQ 音质显式使用 Worker 配置，原 Node.js 服务仍可使用自身的无损设置。
+Cloudflare 仅支持 `MUSIC_QUALITY=low/medium/high` 的 MP3 音质。旧配置 `lossless` 自动映射为 `high`，网易云使用 `exhigh`（回退接口为 320 kbps），QQ 音乐使用 `M800...mp3`；不会请求 FLAC。QQ 音质显式使用 Worker 配置。
 
 ### 登录认证与请求体限制
 
@@ -117,34 +119,35 @@ Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind 
 
 预览支持 HTTPS 媒体直链和本地视频／音频文件，以及粘贴本站生成的 `stream.m3u8` 链接。本站歌单由页面底部的常驻播放器控制，切换路由不会中断播放。本地文件使用 Object URL，不会上传。
 
-**回滚**：把 `wrangler.jsonc` 的 `assets.directory` 改回 `"../public"` 并重新部署即可回到旧前端；`public/` 目录保持冻结、未被修改。
-
-`public/` 与 `public/js/vendor/` 现在只服务冻结的 Node.js 版前端，同步脚本保留为 `npm run build:vendor`。
+**回滚**：保留前一次可用的 Cloudflare 部署版本，需要恢复时回滚该 Worker 版本及其静态资源。数据库迁移与 Secret 变更单独核对；冻结的 Node.js 分支使用独立运行方式。
 
 ## 本地验证
 
-建议使用 Node.js 24+（仓库测试使用 Node 24）。以下命令在 `cloudflare/` 目录运行：
+建议使用 Node.js 24+（仓库测试使用 Node 24）。以下命令从仓库根目录运行：
 
 ```powershell
-npm ci
-Copy-Item .dev.vars.example .dev.vars
+npm --prefix web ci
+npm --prefix cloudflare ci
+Copy-Item cloudflare/.dev.vars.example cloudflare/.dev.vars
 ```
 
-把 `.dev.vars` 中的 `ENCRYPTION_KEY` 改为独立生成的至少 32 字符随机密钥。占位值会被程序拒绝。然后运行：
+把 `cloudflare/.dev.vars` 中的 `ENCRYPTION_KEY` 改为独立生成的至少 32 字符随机密钥。占位值会被程序拒绝。然后运行：
 
 ```powershell
-npm run db:local
+npm --prefix cloudflare run db:local
 npm run dev
 npm test
+npm run check
+npm run build
 ```
 
 本地开发默认使用 Wrangler 的本地 D1 数据，不会修改远端数据库。生产密钥的本机备份为 Git 忽略的 `.dev.vars.production`；请将它备份到你自己的安全位置，避免丢失后无法解密已保存的账号 Cookie。
 
 ## 首次部署
 
-本站已完成首次部署。以下步骤适用于新的 Cloudflare 账号，命令均在 `cloudflare/` 目录执行：
+本站已完成首次部署。完成上面的前端与 Worker 依赖安装后，以下步骤适用于新的 Cloudflare 账号，命令均在 `cloudflare/` 目录执行：
 
-1. 安装锁定依赖：`npm ci`，并登录 Wrangler：`npx wrangler login`。
+1. 登录 Wrangler：`npx wrangler login`。
 2. 创建 D1：`npx wrangler d1 create music-for-url`。把返回的 `database_id` 填进 `wrangler.jsonc`，保留 `DB` 绑定名。
 3. 删除 `wrangler.jsonc` 中本站的 `routes`，保留 `workers_dev: true`；如需自定义域名，使用自己账号下的域名配置。
 4. 初始化远端表：`npm run db:remote`。
@@ -169,16 +172,14 @@ npx wrangler r2 bucket lifecycle add music-for-url-private-cache expire-cover --
 
 部署前执行 `npm run db:remote` 添加 `song_sources`，其音源有效期最多 90 秒，Cron 清理过期项。选型和费用见[技术对比](../website/guide/architecture.md)。
 
-## 双部署与官网
+## Pages 兼容部署与官网
 
-Node.js 版本共用播放器 API、音质策略与流代理，以 SQLite / 可选磁盘缓存运行，支持浏览器可解码的 FLAC，旧 FFmpeg 输出保留。两种环境的认证签名和加密数据不能直接互换。
+Pages Functions 入口在仓库根目录 `functions/[[path]].js`，配置为 `cloudflare/wrangler.pages.jsonc`，静态产物统一使用 `web/dist`。从仓库根目录部署，以便 Wrangler 同时发现 `functions/`。设置 D1 / R2 和 Secret，定时清理另配维护 Worker；推荐 Workers Static Assets。步骤见[部署指南](../website/guide/deployment.md)。
 
-Pages Functions 入口在根目录 `functions/[[path]].js`，配置为 `wrangler.pages.jsonc`。必须设置 D1 / R2 和 Secret，定时清理另配维护 Worker；推荐 Workers Static Assets。步骤见[部署指南](../website/guide/deployment.md)。
-
-官网仅在 [GitHub Pages](https://znc15.github.io/MusicForUrl/) 发布，构建前自动同步仓库四份文档，`.github/workflows/website.yml` 自动构建和发布。
+官网在 [GitHub Pages](https://znc15.github.io/MusicForUrl/) 发布，构建前自动同步项目 README、Cloudflare 和动画说明三份文档。冻结版 Node.js / Docker 文档使用基线提交链接，不生成副本。`.github/workflows/website.yml` 在维护分支推送后自动构建和发布。
 
 ## 迁移说明
 
-旧版 Express/SQLite 数据不会自动导入 D1，需要重新登录，收藏和历史从新数据库开始。`server.js`、`routes/` 与 `deploy/` 继续支持自有服务器。Cloudflare 使用 `cloudflare/src/`、`cloudflare/schema.sql`、共享 `lib/player-*.js` 策略 / API / 代理、`lib/qqmusic.js` 与 `public/`。
+从冻结的 Express/SQLite 版本迁移时，需要重新登录，收藏和历史从新数据库开始；如需保留旧数据，应另行准备受控导入。Cloudflare 分支保留 `cloudflare/src/`、`cloudflare/schema.sql`、`lib/player-*.js` 策略 / API / 代理、`lib/qqmusic.js`、`web/` 和 Pages 兼容入口 `functions/`。
 
 网易云、QQ 音乐、酷狗与酷我的接口并非 Cloudflare 平台服务，可能随上游接口或风控变化而失效。部署后应分别用真实账号验证扫码、歌单解析、音频地址和播放器行为；酷狗扫码登录的签名算法也随 Web 前端发版变化，失效时先看 `kugou-login.js`。

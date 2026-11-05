@@ -1,6 +1,6 @@
 {
   "name": "music-for-url-pages",
-  "pages_build_output_dir": "../public",
+  "pages_build_output_dir": "../web/dist",
   "compatibility_date": "2026-10-03",
   "vars": { "AUDIO_CACHE_ENABLED": "false" },
   "d1_databases": [
