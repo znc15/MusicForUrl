@@ -39,11 +39,19 @@
 - 浏览器验收：A→B 后旧列表清除、19 条收藏删除末页项后回退为 18 条、错误重试恢复、预览失败无成功提示；375×812 无横纵溢出，首页输入 52px、预览输入 44px、播放器/队列/设置可达，进度方向键可用；未知统计显示 —，重试后真实 0 正确显示。真实本地 Worker 三个平台 Cookie 入口返回 405，health/capabilities/页面返回 200。
 - 真实 QQ/酷狗/酷我账号与 VRChat/AVPro 验证仍需账号及客户端参与。本次生产检查发现 QQ 活跃会话为 0，酷狗/酷我无用户，现有网易云 7 个活跃会话保留。
 
-## 发布进度（2026-11-05）
+## 生产发布（2026-11-05）
 
-- 用户已授权推送 `master` / `node` 并部署 Cloudflare。沿用 `music-for-url` Worker、原 D1 / R2 / Analytics 绑定、域名与 Secret；不新建生产资源。
-- 推送前发现远端 `master` 新增 4 个提交，至 `1118ca9`。已通过合并保留其 Cron 顺序、平台存储/播放器取消、Pages Functions 构建和部署文档修复，同时维持 Cloudflare 主线与 Node 冻结约定。
-- 生产 D1 仍为两平台 users CHECK；已导出到 ignored 目录 `.codex/releases/2026-11-05-master-51c81ed/`，并记录 Time Travel bookmark、原 Worker 版本 `453a44ea-70e5-4351-953b-9ee5744a6698`。
-- 真实导出的隔离迁移验证通过：47 用户、1 歌单、2 收藏、284 历史事件、404 聚合均完整保持，12 个显式索引/触发器和 2 个自增序列保持，完整性/外键检查通过，重复迁移无变化。
-- 合并候选验收：根 24、Worker/迁移 79、前端 29 项共 132/132 通过，Wrangler 本地 D1 集成 1/1；React 类型检查/构建、Worker dry-run、Pages Functions 与产物布局、VitePress 构建通过。
-- 下一步：推送合并候选，执行生产统一迁移，发布 Worker 与静态资源，验证线上接口与页面，记录最终提交和部署版本。
+- 已推送：`master=cca392eb54ed9bf5260a38f6a884641fe8e5436f`，`node=f3830c4374d3e6d48f14e889acf66a80570c5600`。GitHub 默认分支为 master，Node 原树保持。通过真实 merge 纳入远端至 `1118ca9` 的 4 个提交，保留 Cron 顺序、平台存储/播放器取消、Pages Functions 构建及部署指南修复。
+- GitHub Actions：Project checks `42001835685`、Project website `42001835681` 均成功，文档站已发布。合并候选根 24 + Worker/迁移 79 + 前端 29 = 132 项、本地 D1 集成 1 项通过；React/Worker/Pages/文档构建通过。
+- 原 D1 已完成 `0004-unified-platform-schema`，users 允许四平台，外键检查通过，重复执行返回 `Already applied`。迁移前后完整导出逐行核对：47 用户、1 歌单、2 收藏、284 历史事件、404 聚合及其他原表、自增序列保持。
+- 备份及发布证据：Git 忽略目录 `.codex/releases/2026-11-05-master-51c81ed/`。迁移前书签 `00000348-00000000-0000511a-8a632b15e91dddaf6ffc04b2602d3721`；原可用 Worker 版本 `453a44ea-70e5-4351-953b-9ee5744a6698`。
+- 推送触发了既有 Cloudflare Workers Builds（build `73f7e4f3-509b-4d1a-8410-5b57729474ac`）。其发布结果为纯静态版本 `1e51015b-e951-487d-92c0-519d06d72c70`，首页引用 `/src/main.tsx`，API 404，且丢失原绑定。已回退原版本后按 `cloudflare/wrangler.jsonc` 手动发布完整 Worker。
+- 纯静态发布还移除了在线 `ENCRYPTION_KEY` 绑定；已使用原有 `.dev.vars.production` 备份恢复同一密钥，无轮换。恢复前在本地检查全部 43 条非空 Cookie 密文均可解密，7 个活跃会话均匹配；4 条已退出账号的空 Cookie 保持原样。没有撤销会话。
+- 当前生产 Worker 版本：`e3d55dce-2ed7-4417-9895-6e8e2b0d70f1`（100%），应用标记 `DEPLOY_VERSION=cca392e`。原 D1、私有 R2、Analytics、两个域名、workers.dev 与每日 UTC 03:17 Cron 已恢复并沿用。
+- 线上验证：三个域名 health 均 200 / ok / cca392e；capabilities 与匿名 auth/status 为 200 JSON；QQ/酷狗/酷我 Cookie 入口为 405；首页引用生产 assets，375×812 页面宽度 375、输入框 52px，桌面/移动截图已检查；accounts/user/preview 刷新 200，无页面异常。真实平台账号与 VRChat/AVPro 尚待实际用户验收。
+
+## 当前阻塞与下一步
+
+- **Cloudflare 自动发布配置待修正**：控制台浏览器未登录，已请求用户在打开的 Cloudflare 页面完成登录。CLI 发布可用，但下次普通推送仍可能触发错误的纯静态部署。先修正 Worker Settings → Build 的根目录、构建和部署命令，再推送后续提交；本轮不改登录凭据或创建新 API Token。
+- 推荐配置：根目录仓库根；构建 `npm --prefix cloudflare ci && npm --prefix web ci && npm test && npm run build:worker`；部署 `node cloudflare/node_modules/wrangler/bin/wrangler.js deploy --config cloudflare/wrangler.jsonc --keep-vars`；生产分支 master，Node.js 24，沿用原资源和 Secret。需要通过下一次实际自动构建确认 API / assets / 绑定完整。
+- **本地待推送补丁**：`cloudflare/scripts/migrate.mjs` 已修复 Wrangler 远端文件导入输出混入进度文本导致的 JSON 解析误报；严格查询 JSON、非零退出处理、迁移后 FK 与版本 ledger 检查保留。迁移单测 10/10、Worker 总测试 83/83、真实本地 D1 集成 1/1 通过；生产 no-op 检查通过。补丁及本记录将在自动发布配置修好后推送。

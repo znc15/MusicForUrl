@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile } from 'node:fs/promises';
-import { schema, VERSION, inspectDatabase, migrationPlan, migrateDatabase } from '../scripts/migrate.mjs';
+import { readFileSync } from 'node:fs';
+import { schema, VERSION, inspectDatabase, migrationPlan, migrateDatabase, wranglerDatabase } from '../scripts/migrate.mjs';
 
 function fixture(t, source = '') {
   const sqlite = new DatabaseSync(':memory:');
@@ -121,4 +122,87 @@ test('failure inside the migration batch rolls back parent and child data togeth
   assert.equal(db.query("SELECT name FROM sqlite_schema WHERE name = 'schema_migrations'").length, 0);
   assert.equal(db.query('PRAGMA foreign_key_check').length, 0);
   await migrateDatabase(db);
+});
+
+test('Wrangler query output stays strict and rejects unsuccessful or malformed results', () => {
+  let result = { status: 0, stdout: JSON.stringify([{ success: true, results: [{ value: 7 }] }]), stderr: '' };
+  const db = wranglerDatabase({ remote: true }, (_command, args) => {
+    assert.ok(args.includes('--command'));
+    assert.ok(args.includes('--json'));
+    return result;
+  });
+  assert.deepEqual(db.query('SELECT 7 AS value'), [{ value: 7 }]);
+  result.stdout = JSON.stringify({ success: true, results: [] });
+  assert.deepEqual(db.query('PRAGMA foreign_key_check'), []);
+  result.stdout = JSON.stringify([{ success: false, results: [] }]);
+  assert.throws(() => db.query('SELECT 1'), /D1 rejected/);
+  for (const stdout of ['', '├ Checking if file needs uploading\n[]', '{malformed']) {
+    result.stdout = stdout;
+    assert.throws(() => db.query('SELECT 1'), /invalid JSON/);
+  }
+  for (const payload of [null, [], {}, { error: 'rejected' }, { success: true }, { success: true, results: {} }]) {
+    result.stdout = JSON.stringify(payload);
+    assert.throws(() => db.query('SELECT 1'), /unexpected result shape/);
+  }
+});
+
+test('Wrangler file imports accept progress plus JSON while process failures still reject', async () => {
+  const success = JSON.stringify([{ results: [{ 'Total queries executed': 4 }], success: true, finalBookmark: 'fixture' }], null, 2);
+  let result = { status: 0, stdout: `├ Checking if file needs uploading\n│\n├ 🌌 Uploading migration.sql\n│ 🌌 Uploading complete.\n\n${success}\n`, stderr: '' };
+  const db = wranglerDatabase({ remote: true }, (_command, args) => {
+    assert.ok(args.includes('--file'));
+    assert.ok(args.includes('--yes'));
+    assert.ok(args.includes('--remote'));
+    assert.equal(readFileSync(args[args.indexOf('--file') + 1], 'utf8'), 'SELECT 1;');
+    return result;
+  });
+  await db.execute('SELECT 1;');
+  result = { status: 1, stdout: '├ Checking if file needs uploading\n' + JSON.stringify({ error: { text: 'import failed' } }), stderr: '' };
+  await assert.rejects(db.execute('SELECT 1;'), /import failed/);
+  result = { status: 1, stdout: success, stderr: 'process failed after output' };
+  await assert.rejects(db.execute('SELECT 1;'), /process failed/);
+  const failure = new Error('spawn failed');
+  result = { error: failure, status: null, stdout: '', stderr: '' };
+  await assert.rejects(db.execute('SELECT 1;'), error => error === failure);
+});
+
+test('progress-bearing imports reach post-migration FK and ledger checks and then become a no-op', async t => {
+  const memory = fixture(t, legacySchema);
+  seed(memory);
+  let imports = 0;
+  const queriesAfterImport = [];
+  const db = wranglerDatabase({ remote: true }, (_command, args) => {
+    if (args.includes('--command')) {
+      const sql = args[args.indexOf('--command') + 1];
+      if (imports) queriesAfterImport.push(sql);
+      return { status: 0, stdout: JSON.stringify([{ success: true, results: memory.query(sql) }]), stderr: '' };
+    }
+    const file = args[args.indexOf('--file') + 1];
+    memory.execute(readFileSync(file, 'utf8'));
+    imports++;
+    return { status: 0, stdout: '├ Checking if file needs uploading\n│\n' + JSON.stringify([
+      { success: true, results: [{ 'Total queries executed': 40 }], finalBookmark: 'fixture' },
+    ]), stderr: '' };
+  });
+  assert.deepEqual(await migrateDatabase(db), { changed: true, version: VERSION });
+  assert.ok(queriesAfterImport.includes('PRAGMA foreign_key_check'));
+  assert.ok(queriesAfterImport.some(sql => sql.startsWith('SELECT version FROM schema_migrations WHERE')));
+  assert.deepEqual(await migrateDatabase(db), { changed: false, version: VERSION });
+  assert.equal(imports, 1);
+});
+
+test('migration rejects missing completion ledger or failed post-import FK check', async t => {
+  for (const failure of ['ledger', 'foreign-key']) {
+    const memory = fixture(t, schema);
+    const baseQuery = memory.query;
+    let executed = false;
+    const db = {
+      query(sql) {
+        if (executed && failure === 'foreign-key' && sql === 'PRAGMA foreign_key_check') return [{ table: 'fixture', rowid: 1 }];
+        return baseQuery(sql);
+      },
+      execute() { executed = true; },
+    };
+    await assert.rejects(migrateDatabase(db), failure === 'ledger' ? /completion was not recorded/ : /Foreign key validation failed/);
+  }
 });

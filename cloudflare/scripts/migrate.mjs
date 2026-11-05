@@ -87,27 +87,40 @@ export async function inspectDatabase(query) {
   };
 }
 
-export function wranglerDatabase(options) {
+export function wranglerDatabase(options, spawn = spawnSync) {
   const cli = path.join(root, 'node_modules/wrangler/bin/wrangler.js');
   const base = [cli, 'd1', 'execute', options.database || 'music-for-url', options.remote ? '--remote' : '--local', '--json'];
   if (options.config) base.push('--config', options.config);
   if (options.persistTo) base.push('--persist-to', options.persistTo);
   const run = args => {
-    const result = spawnSync(process.execPath, [...base, ...args], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+    const result = spawn(process.execPath, [...base, ...args], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(result.stderr || result.stdout || `Wrangler exited ${result.status}`);
-    const output = JSON.parse(result.stdout);
-    const results = Array.isArray(output) ? output : [output];
-    if (results.some(row => row.success === false)) throw new Error('D1 rejected the migration query.');
-    return results.flatMap(row => row.results || []);
+    return result.stdout;
   };
   return {
-    query: sql => run(['--command', sql]),
+    query(sql) {
+      let output;
+      try { output = JSON.parse(run(['--command', sql])); }
+      catch (error) {
+        if (error instanceof SyntaxError) throw new Error('Wrangler query returned invalid JSON.');
+        throw error;
+      }
+      const results = Array.isArray(output) ? output : [output];
+      if (results.some(row => row?.success === false)) throw new Error('D1 rejected the migration query.');
+      if (!results.length || results.some(row => row?.success !== true || !Array.isArray(row.results))) {
+        throw new Error('Wrangler query returned an unexpected result shape.');
+      }
+      return results.flatMap(row => row.results);
+    },
     async execute(sql) {
       const directory = await mkdtemp(path.join(tmpdir(), 'mfu-migration-'));
       const file = path.join(directory, 'migration.sql');
       try {
         await writeFile(file, sql);
+        // Remote --file uses D1 import. Wrangler's spinner writes progress to
+        // stdout even with --json; successful completion is its zero exit code.
+        // Import errors exit nonzero. migrateDatabase verifies FK + ledger next.
         run(['--file', file, '--yes']);
       } finally {
         await rm(file, { force: true });
@@ -125,6 +138,10 @@ export async function migrateDatabase(db) {
   await db.execute(plan);
   const after = await db.query('PRAGMA foreign_key_check');
   if (after.length) throw new Error('Foreign key validation failed after migration. Restore the pre-migration backup.');
+  const applied = await db.query(`SELECT version FROM schema_migrations WHERE version = '${VERSION}'`);
+  if (applied.length !== 1 || applied[0].version !== VERSION) {
+    throw new Error('Migration completion was not recorded. Inspect the database before retrying.');
+  }
   return { changed: true, version: VERSION };
 }
 
