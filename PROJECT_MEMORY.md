@@ -2,7 +2,7 @@
 
 ## 当前方向（2026-11-05）
 
-**当前阶段：2.4.0 沉浸播放器完成本地验收，准备发布。** 用户要求联网参考 Apple Music，采用左右布局与玻璃材质并完善播放。2.3.0 为当前生产基线；仍仅维护 master、node 冻结。Apple Music 平台接入继续保留评估，独立环境与账号尚未准备。
+**当前阶段：2.4.0 沉浸播放器已推送、部署并发布 Release。** 用户要求联网参考 Apple Music，采用左右布局与玻璃材质并完善播放。当前线上为2.4.0；仍仅维护 master、node 冻结。Apple Music 平台接入继续保留评估，独立环境与账号尚未准备。
 
 ## 2.4.0 播放界面方向（2026-11-05）
 
@@ -16,6 +16,10 @@
 - 浏览器实际验收使用合成Range WAV、12/150首队列、本地WAV和canvas生成WebM：同audio跨路由无pause，进度键盘可调，切音质保留位置，队列点歌/随机回退/自然单曲循环与手动下一首通过；第130首搜索后定位可达；mini队列缩到375px可关闭；切源/关闭时旧audio已暂停；本地音频controls、视频原生controls、旧ObjectURL释放通过。
 - 原生全屏请求在受控Chrome返回 `TypeError: not granted`，已验证拒绝提示，普通浏览器的实际进入/退出留待手动确认。全屏期间自动公告延期和退出后调度由实际组件5项单测覆盖。剪贴板写入有成功反馈；未读取系统剪贴板内容。
 - 视觉已检查桌面、768/375/320px、亮暗主题、空状态与本地媒体。审查修复长队列定位范围/仅队列内滚动、mini队列窄屏关闭入口。证据：`output/playwright/2.4.0/`（Git忽略）；测试素材仅用于验收。
+- 发布提交 `e757ecee8bbe775c803f9964dfdb94f9dc11d5ad` 已推master；GitHub [Project checks 42044508365](https://github.com/znc15/MusicForUrl/actions/runs/42044508365)、[Project website 42044508534](https://github.com/znc15/MusicForUrl/actions/runs/42044508534) 均成功，CI复验219项、D1隔离集成1项及全部构建，文档站已发布。
+- Cloudflare 首次构建 `524f85c3-0557-4650-a61f-2ab3a5526e87` 测试与上传成功，在最终部署返回通用错误，日志未给具体原因；线上当时仍为2.3.0。用既有显式Wrangler命令成功发布 `f2385f15-7291-4258-a00b-985dc11eeaa1`，随后自动构建重试 `e4d4f13f-5cac-4d53-a37a-91b7227096d5` 完整成功，当前Worker为 `b8920211-de26-4d2f-8bcc-e15edc06bf90`。没有更改构建配置/令牌/数据库/Secret。
+- 三域名health为200/ok/e757ece；DB/R2/两项Analytics/ASSETS/ENCRYPTION_KEY绑定沿用。线上关于页2.4.0、新公告、播放器空态和375px本地音频实际播至结束验证通过，无页面异常。证据 `.codex/releases/2026-11-05-2.4.0/`。
+- [v2.4.0 Release](https://github.com/znc15/MusicForUrl/releases/tag/v2.4.0) 已发布并设为Latest，标签准确指向e757ece；原生全屏手动验收缺口已在Release说明记录。其余真实平台账号与VRChat/AVPro客户端的实播仍沿用此前待验收状态，Apple Music接入继续等待独立环境/账号。
 
 ## 2.3.0 实施与验收（2026-11-05）
 
