@@ -13,6 +13,7 @@
 
 - 在线使用：<https://music.nyasakura.com/>
 - 文档站：<https://znc15.github.io/MusicForUrl/>
+- 版本发布：[GitHub Releases](https://github.com/znc15/MusicForUrl/releases) · [更新记录](CHANGELOG.md)
 
 ![MusicForUrl 工作台与媒体预览](.github/assets/workspace-preview.jpg)
 

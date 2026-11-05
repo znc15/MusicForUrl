@@ -1,6 +1,6 @@
 {
   "name": "music-for-url",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "多平台歌单转播放链接 · Cloudflare Workers + D1",
   "private": true,
   "engines": {

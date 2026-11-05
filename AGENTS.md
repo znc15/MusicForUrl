@@ -16,6 +16,14 @@
 - 文档构建：先安装 `website/` 依赖，再运行根 `npm run docs:build`。
 - 安装前端与 Worker 依赖：`npm ci --prefix web`、`npm ci --prefix cloudflare`；根包只提供命令和版本元数据。
 
+## 版本与 Release
+
+- 用户于 2026-11-05 明确要求：每次更新都同步递增版本号，并更新对应的 GitHub Release，作为发布完成条件执行。
+- 根 `package.json` 是产品版本来源；根、`web/`、`cloudflare/` 的 package.json 与 package-lock.json 顶层及根包版本保持一致。前端通过 `__APP_VERSION__` 读取根版本；`DEPLOY_VERSION` 继续记录部署提交 SHA。
+- 修复与小调整递增 patch，新增能力或成批功能更新递增 minor，破坏性变更递增 major。同一发布批次的准备与验收记录使用同一版本。
+- 更新 `CHANGELOG.md`，只列已实现内容和实际升级要求。通过相关测试与构建、推送 master 并验证部署后，为实际发布提交创建 `vX.Y.Z` 标签和 GitHub Release，填写中文更新说明并核对 Latest。
+- 保留历史标签与 Release；新版本仅来自 master，冻结 node 分支的代码与 2.1.1 版本保持原样。推送、发布与部署沿用当次有效授权。
+
 ## 结构
 
 `web/` 为当前前端，`cloudflare/` 为后端和数据库迁移，`functions/` 为 Pages 兼容入口。
