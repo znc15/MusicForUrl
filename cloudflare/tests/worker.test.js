@@ -482,12 +482,12 @@ test('cron waits for every purge before publishing refreshed stats', async t => 
       const run = statement.run.bind(statement);
       statement.run = () => new Promise(resolve => releases.push(() => resolve(run())));
     }
-    if (sql.includes('SUM(play_count)')) aggregateReads++;
+    if (sql.includes('COUNT(*) AS songs')) aggregateReads++;
     return statement;
   };
   const tasks = [];
   worker.scheduled({}, env, { waitUntil(task) { tasks.push(task); } });
-  assert.equal(releases.length, 5);
+  assert.equal(releases.length, 6);
   assert.equal(aggregateReads, 0);
   // Keep playback pruning last: the aggregate must not capture its expired row.
   for (const release of releases.slice(1)) release();
@@ -496,7 +496,7 @@ test('cron waits for every purge before publishing refreshed stats', async t => 
   releases[0]();
   await Promise.all(tasks);
   assert.equal(aggregateReads, 1);
-  assert.equal(env.sqlite.prepare("SELECT value FROM site_stats WHERE key = 'plays'").get().value, 0);
+  assert.equal(env.sqlite.prepare('SELECT plays FROM playback_totals').get().plays, 0);
 });
 
 test('cron preserves purge failures and does not refresh partially cleaned stats', async t => {
@@ -508,7 +508,7 @@ test('cron preserves purge failures and does not refresh partially cleaned stats
   env.DB.prepare = sql => {
     const statement = prepare(sql);
     if (sql.startsWith('DELETE FROM qr_sessions')) statement.run = async () => { throw failure; };
-    if (sql.includes('SUM(play_count)')) aggregateReads++;
+    if (sql.includes('COUNT(*) AS songs')) aggregateReads++;
     return statement;
   };
   const tasks = [];
@@ -527,7 +527,7 @@ test('cron logs stats failures without rejecting completed cleanup', async t => 
   t.mock.method(console, 'error', (...args) => errors.push(args));
   env.DB.prepare = sql => {
     const statement = prepare(sql);
-    if (sql.includes('SUM(play_count)')) statement.first = async () => { throw failure; };
+    if (sql.includes('COUNT(*) AS songs')) statement.first = async () => { throw failure; };
     return statement;
   };
   const tasks = [];
@@ -545,6 +545,8 @@ test('recent and top history exclude expired events before the daily cleanup run
   );
   insert.run(user.id, '123', '555', Date.now());
   insert.run(user.id, '456', '666', Date.now() - PLAY_LOG_RETENTION_MS - 10000);
+  await recordPlayback(env, user.id, '123', { id: '555', name: 'Recent' });
+  await recordPlayback(env, user.id, '456', { id: '666', name: 'Expired' }, Date.now() - PLAY_LOG_RETENTION_MS - 10000);
   const headers = { 'x-token': token };
   const recent = await worker.fetch(new Request('https://music.example.test/api/history/recent', { headers }), env, {});
   const recentBody = await recent.json();
@@ -654,10 +656,16 @@ test('playlist generation resolves the link in a single request', async t => {
   assert.equal(response.status, 200);
   assert.equal(body.data.playlist.name, 'Test list');
   assert.equal(body.data.playlist.songCount, 1);
+  assert.equal(body.data.playlist.totalCount, 1);
+  assert.equal(body.data.playlist.includedCount, 1);
+  assert.equal(body.data.playlist.partialReason, null);
   assert.equal(body.data.default, 'lite');
   assert.match(body.data.url,
     /^https:\/\/music\.example\.test\/api\/playlist\/m3u8\/[^/]+\/123456\/stream\.m3u8$/);
   assert.equal(body.data.urls[0].url, body.data.url);
+  const grant = new URL(body.data.url).pathname.split('/')[4];
+  const payload = JSON.parse(Buffer.from(grant.split('.')[0], 'base64url').toString());
+  assert.equal(body.data.expiresAt, payload.e * 1000);
 });
 
 test('shed mode rejects new sessions while issued links keep playing', async t => {

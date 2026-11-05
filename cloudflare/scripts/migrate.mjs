@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 export const schema = await readFile(new URL('../schema.sql', import.meta.url), 'utf8');
-export const VERSION = '0004-unified-platform-schema';
+export const VERSION = '0005-persistent-playback-stats';
+export const PREVIOUS_VERSION = '0004-unified-platform-schema';
 const children = ['playlists', 'favorites', 'play_stats', 'play_logs'];
 const quote = name => '"' + name.replaceAll('"', '""') + '"';
 const tableDefinition = name => schema.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\([\\s\\S]+?\\n\\);`))[0];
@@ -15,6 +16,10 @@ const tableDefinition = name => schema.match(new RegExp(`CREATE TABLE IF NOT EXI
 // in one D1 batch; foreign_keys remains enabled throughout the rebuild.
 export function migrationPlan(snapshot) {
   if (snapshot.applied.includes(VERSION)) return null;
+  const ledger = version => `INSERT INTO schema_migrations (version, applied_at_ms) VALUES ('${version}', CAST(strftime('%s', 'now') AS INTEGER) * 1000);`;
+  // The previous migration already reconciled legacy tables. This additive
+  // upgrade preserves those rows and never replays the historical backfill.
+  if (snapshot.applied.includes(PREVIOUS_VERSION)) return schema + '\n' + ledger(VERSION);
   const tables = new Map(snapshot.objects.filter(row => row.type === 'table').map(row => [row.name, row]));
   if ([...tables.keys()].some(name => name.startsWith('__mfu_'))) {
     throw new Error('Migration scratch tables already exist; inspect the previous migration before continuing.');
@@ -72,7 +77,7 @@ export function migrationPlan(snapshot) {
     sql.push('INSERT INTO __mfu_qr_sessions SELECT * FROM qr_sessions; DROP TABLE qr_sessions; ALTER TABLE __mfu_qr_sessions RENAME TO qr_sessions;');
     sql.push('CREATE INDEX qr_sessions_expiry_idx ON qr_sessions(expires_at_ms);');
   }
-  sql.push(`INSERT INTO schema_migrations (version, applied_at_ms) VALUES ('${VERSION}', CAST(strftime('%s', 'now') AS INTEGER) * 1000);`);
+  sql.push(ledger(PREVIOUS_VERSION), ledger(VERSION));
   return sql.join('\n');
 }
 

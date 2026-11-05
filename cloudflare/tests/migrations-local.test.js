@@ -20,7 +20,7 @@ test('Wrangler D1 batch preserves legacy foreign-key children and rolls back fai
     d1_databases: [{ binding: 'DB', database_name: 'migration-test', database_id: '00000000-0000-0000-0000-000000000004' }],
   }));
   const db = wranglerDatabase({ config, persistTo: path.join(directory, 'state'), database: 'migration-test' });
-  const legacy = schema.replace("'netease', 'qq', 'kugou', 'kuwo'", "'netease', 'qq'")
+  const legacy = schema.split('-- v2 totals')[0].replace("'netease', 'qq', 'kugou', 'kuwo'", "'netease', 'qq'")
     .replace(/CREATE TABLE IF NOT EXISTS schema_migrations \([\s\S]*?\);/, '')
     .replace(/(CREATE TABLE IF NOT EXISTS qr_sessions \([\s\S]*?platform TEXT NOT NULL)/, "$1 CHECK (platform IN ('netease', 'qq'))")
     .replace(/  duration_ms INTEGER NOT NULL DEFAULT 0,\r?\n/, '');
@@ -45,4 +45,20 @@ test('Wrangler D1 batch preserves legacy foreign-key children and rolls back fai
   db.query("INSERT INTO users VALUES (8, 'kugou', 'k8', '', '', 0, 'cipher2', 'token2', 1, 1, 1)");
   db.query("INSERT INTO users VALUES (9, 'kuwo', 'k9', '', '', 0, 'cipher3', 'token3', 1, 1, 1)");
   assert.equal((await migrateDatabase(db)).changed, false);
+  // Exercise the real D1 trigger/atomicity semantics, including guest events
+  // with no users FK and permanent totals that survive retention cleanup.
+  const startedAt = db.query('SELECT started_at_ms FROM playback_totals')[0].started_at_ms;
+  const event = `INSERT INTO playback_events (actor_key, user_id, platform, playlist_id, song_id, duration_ms, surface, played_at_ms)
+    VALUES ('guest:fixture', NULL, 'kuwo', '1', '2', 90000, 'hls', 1000);`;
+  await db.execute(event);
+  assert.equal(db.query('SELECT plays FROM playback_totals')[0].plays, 1);
+  assert.equal(db.query('SELECT duration_ms FROM playback_totals')[0].duration_ms, 90000);
+  await assert.rejects(db.execute(event + '\nINSERT INTO missing_table VALUES (1);'));
+  assert.equal(db.query('SELECT plays FROM playback_totals')[0].plays, 1);
+  assert.equal(db.query('SELECT COUNT(*) AS n FROM playback_events')[0].n, 1);
+  await db.execute('DELETE FROM playback_events;');
+  assert.equal(db.query('SELECT plays FROM playback_totals')[0].plays, 1);
+  assert.equal(db.query('SELECT started_at_ms FROM playback_totals')[0].started_at_ms, startedAt);
+  assert.equal((await migrateDatabase(db)).changed, false);
+  assert.equal(db.query('SELECT plays FROM playback_totals')[0].plays, 1);
 });

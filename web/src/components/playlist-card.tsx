@@ -22,6 +22,7 @@ export function gradientFor(seed: string): string {
 
 export function CoverArt({ src, seed, className }: { src?: string; seed: string; className?: string }) {
   const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => setFailed(false), [src]);
   const useImage = !!src && !failed;
   return (
     <span
@@ -46,32 +47,39 @@ export function CoverArt({ src, seed, className }: { src?: string; seed: string;
 }
 
 export function PlaylistCard({
-  id, name, meta, cover, onOpen, className,
+  id, name, meta, cover, onOpen, onPlay, className,
 }: {
   id: string;
   name: string;
   meta: string;
   cover?: string;
   onOpen: () => void;
+  onPlay?: () => void;
   className?: string;
 }) {
   return (
-    <div className={cn('group', className)}>
+    <div className={cn('group min-w-0', className)}>
+      <div className="relative">
       <button
         type="button"
         onClick={onOpen}
         className="relative block aspect-square w-full overflow-hidden rounded-xl shadow-[var(--shadow-card)] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:-translate-y-0.5"
-        aria-label={`播放 ${name}`}
+        aria-label={`${onPlay ? '查看歌单' : '播放'} ${name}`}
       >
         <CoverArt src={cover} seed={id} className="size-full" />
-        <span
+        {!onPlay && <span
           aria-hidden="true"
           className="absolute bottom-2 right-2 grid size-8 place-items-center rounded-full bg-white/92 text-[var(--hero-mid)] opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
         >
           <Play className="size-3.5 fill-current" />
-        </span>
+        </span>}
       </button>
-      <p className="mt-2.5 truncate text-[13px] font-medium">{name}</p>
+      {onPlay && <button type="button" onClick={onPlay} aria-label={`播放 ${name}`}
+        className="absolute bottom-2 right-2 grid size-9 place-items-center rounded-full bg-card text-primary shadow-md transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <Play className="size-4 fill-current" />
+      </button>}
+      </div>
+      <button type="button" onClick={onOpen} className="mt-2.5 block max-w-full truncate text-left text-[13px] font-medium hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{name}</button>
       <p className="truncate text-[11.5px] text-muted-foreground">{meta}</p>
     </div>
   );

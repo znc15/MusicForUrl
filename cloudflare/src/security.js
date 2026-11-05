@@ -165,6 +165,12 @@ async function createPlaybackToken(env, user, playlistId) {
   return `${content}.${toBase64Url(signature)}`;
 }
 
+// Only used for tokens minted by this service; authorization still verifies
+// the signature through getPlaybackUser on every playback request.
+function playbackTokenExpiresAt(token) {
+  return JSON.parse(decoder.decode(fromBase64Url(token.split('.')[0]))).e * 1000;
+}
+
 async function getPlaybackUser(env, token, platform, playlistId) {
   try {
     const [content, signature, extra] = String(token || '').split('.');
@@ -197,5 +203,5 @@ async function getPlaybackUser(env, token, platform, playlistId) {
 
 export {
   createPlaybackToken, createSession, decryptCookie, getPlaybackUser, getSessionUser,
-  logout, playbackTtlSeconds, requireSecret, sha256Hex,
+  logout, playbackTokenExpiresAt, playbackTtlSeconds, requireSecret, sha256Hex,
 };

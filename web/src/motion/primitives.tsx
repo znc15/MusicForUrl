@@ -82,7 +82,7 @@ export function Segmented<T extends string>({
       aria-label={ariaLabel}
       // w-fit 而不是靠父级：否则在 flex-col 容器里会被 align-items:stretch 拉满整行
       className={cn(
-        'inline-flex max-w-full w-fit flex-wrap items-center gap-1 rounded-lg p-1',
+        'inline-flex max-w-full min-w-0 w-fit flex-nowrap items-center gap-1 overflow-x-auto rounded-lg p-1',
         hero ? 'bg-[var(--hero-seg)]' : 'bg-muted',
         className,
       )}
@@ -109,7 +109,7 @@ export function Segmented<T extends string>({
             }}
             onClick={() => onChange(option.value)}
             className={cn(
-              'relative inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] sm:px-4 font-medium',
+              'relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[13px] sm:px-4 font-medium',
               'transition-colors focus-visible:outline-none focus-visible:ring-2',
               hero ? 'focus-visible:ring-white/70' : 'focus-visible:ring-ring',
               active
@@ -124,7 +124,7 @@ export function Segmented<T extends string>({
                 layoutId={`segmented-${id}`}
                 className={cn(
                   'absolute inset-0 rounded-md',
-                  hero ? 'bg-[var(--hero-field)]' : 'bg-card shadow-sm',
+                  hero ? 'bg-[var(--hero-field)]' : 'bg-card shadow-sm ring-1 ring-border',
                 )}
                 transition={{ duration: DURATION.indicator, ease: [0.4, 0, 0.2, 1] }}
               />

@@ -8,6 +8,9 @@ import { mp3Quality } from './audio-quality.js';
 import { PLATFORMS, platform as platformOf } from './platforms.js';
 
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
+const PARTIAL_CACHE_TTL_SECONDS = 60;
+const PLAYLIST_CACHE_VERSION = 2;
+const PARTIAL_REASONS = new Set(['upstream_page_failed', 'platform_limit', 'missing_tracks']);
 // 游客歌单没有 users 行可以挂靠，因此不走 D1，改用 Cache API。
 const GUEST_CACHE_ORIGIN = 'https://playlist.mfu.internal/';
 
@@ -61,7 +64,7 @@ function parsePlaylistId(input, platform = 'netease') {
   return null;
 }
 
-function normalizedSongs(platform, tracks) {
+function normalizedSongs(platform, tracks, legacyCache = false) {
   const idOf = platform === 'qq'
     ? (track) => track?.mid || track?.id
     : platform === 'kugou'
@@ -73,7 +76,10 @@ function normalizedSongs(platform, tracks) {
       id: String(idOf(track) || ''),
       name: String(track?.name || ''),
       artist: String(track?.artist || ''),
-      duration: Number(track?.duration) || 180,
+      duration: Number.isFinite(Number(track?.duration)) && Number(track.duration) > 0 ? Number(track.duration) : 0,
+      // 旧缓存曾把未知时长填成 180 秒，只保留封装值，不作为统计已知时长。
+      durationKnown: !legacyCache && track?.durationKnown !== false
+        && Number.isFinite(Number(track?.duration)) && Number(track.duration) > 0,
       cover: String(track?.cover || ''),
     }))
     .filter((song) => validSongId(song.id, platform));
@@ -99,8 +105,8 @@ async function readGuestCache(platform, playlistId) {
 
 async function writeGuestCache(env, ctx, platform, playlistId, playlist) {
   if (!guestCacheUsable()) return;
-  const ttl = Math.max(60, Math.min(7 * CACHE_TTL_SECONDS, Number(env.CACHE_TTL) || CACHE_TTL_SECONDS));
-  const response = new Response(JSON.stringify(playlist), {
+  const ttl = cacheTtl(env, playlist);
+  const response = new Response(JSON.stringify({ ...playlist, cacheVersion: PLAYLIST_CACHE_VERSION }), {
     headers: { 'content-type': 'application/json', 'cache-control': `max-age=${ttl}` },
   });
   const put = caches.default.put(`${GUEST_CACHE_ORIGIN}${platform}/${playlistId}`, response)
@@ -110,26 +116,43 @@ async function writeGuestCache(env, ctx, platform, playlistId, playlist) {
 }
 
 function normalizePlaylist(platform, playlistId, playlist, tracks) {
+  const reportedCount = Number(playlist.totalCount ?? playlist.songCount);
+  const totalCount = Math.max(Number.isFinite(reportedCount) ? Math.max(0, Math.floor(reportedCount)) : 0, tracks.length);
+  const partialReason = tracks.length >= totalCount ? null
+    : PARTIAL_REASONS.has(playlist.partialReason) ? playlist.partialReason : 'missing_tracks';
   return policy.markNormalized({
     id: String(playlistId),
     name: String(playlist.name || ''),
     cover: String(playlist.cover || ''),
-    songCount: Number(playlist.songCount) || tracks.length,
+    songCount: totalCount,
+    totalCount,
+    includedCount: tracks.length,
+    partialReason,
     tracks,
   }, platform);
 }
 
-async function getPlaylist(env, user, playlistId, ctx) {
+function cacheTtl(env, playlist) {
+  if (playlist.partialReason) return PARTIAL_CACHE_TTL_SECONDS;
+  return Math.max(60, Math.min(7 * CACHE_TTL_SECONDS, Number(env.CACHE_TTL) || CACHE_TTL_SECONDS));
+}
+
+async function getPlaylist(env, user, playlistId, ctx, { refreshPartial = false } = {}) {
   const platform = user.platform;
 
   if (user.guest) {
     const cached = await readGuestCache(platform, playlistId);
-    if (cached) return normalizePlaylist(platform, playlistId, cached, cached.tracks);
+    if (cached) {
+      const legacy = cached.cacheVersion !== PLAYLIST_CACHE_VERSION;
+      const value = normalizePlaylist(platform, playlistId, cached, normalizedSongs(platform, cached.tracks, legacy));
+      // 旧版部分结果可能还剩一天 TTL，首次访问即刷新；新版媒体请求复用一分钟缓存。
+      if (!value.partialReason || (!legacy && !refreshPartial)) return value;
+    }
     const fetched = await adapter(platform).getPlaylistDetail(playlistId, '', env);
     const tracks = normalizedSongs(platform, fetched.tracks);
-    const playlist = { name: fetched.name, cover: fetched.cover, songCount: fetched.songCount, tracks };
-    writeGuestCache(env, ctx, platform, playlistId, playlist);
-    return normalizePlaylist(platform, playlistId, playlist, tracks);
+    const playlist = normalizePlaylist(platform, playlistId, fetched, tracks);
+    await writeGuestCache(env, ctx, platform, playlistId, playlist);
+    return playlist;
   }
 
   const cached = await env.DB.prepare(`
@@ -137,11 +160,15 @@ async function getPlaylist(env, user, playlistId, ctx) {
   `).bind(user.id, playlistId, Date.now()).first();
   if (cached) {
     try {
-      const tracks = JSON.parse(cached.songs_json);
+      const payload = JSON.parse(cached.songs_json);
+      const legacy = Array.isArray(payload);
+      const tracks = legacy ? payload : payload?.cacheVersion === PLAYLIST_CACHE_VERSION ? payload.tracks : null;
       if (Array.isArray(tracks)) {
-        return normalizePlaylist(platform, playlistId, {
+        const value = normalizePlaylist(platform, playlistId, {
           name: cached.name, cover: cached.cover, songCount: cached.song_count,
-        }, tracks);
+          ...(legacy ? {} : { totalCount: payload.totalCount, partialReason: payload.partialReason }),
+        }, normalizedSongs(platform, tracks, legacy));
+        if (!value.partialReason || (!legacy && !refreshPartial)) return value;
       }
     } catch (_) {
       // Refresh a damaged cache entry.
@@ -149,9 +176,10 @@ async function getPlaylist(env, user, playlistId, ctx) {
   }
 
   const cookie = await decryptCookie(env, user);
-  const playlist = await adapter(platform).getPlaylistDetail(playlistId, cookie, env);
-  const tracks = normalizedSongs(platform, playlist.tracks);
-  const ttl = Math.max(60, Math.min(7 * CACHE_TTL_SECONDS, Number(env.CACHE_TTL) || CACHE_TTL_SECONDS));
+  const fetched = await adapter(platform).getPlaylistDetail(playlistId, cookie, env);
+  const tracks = normalizedSongs(platform, fetched.tracks);
+  const playlist = normalizePlaylist(platform, playlistId, fetched, tracks);
+  const ttl = cacheTtl(env, playlist);
   await env.DB.prepare(`
     INSERT INTO playlists (user_id, playlist_id, name, cover, song_count, songs_json, expires_at_ms)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -163,9 +191,10 @@ async function getPlaylist(env, user, playlistId, ctx) {
       expires_at_ms = excluded.expires_at_ms
   `).bind(
     user.id, playlistId, String(playlist.name || ''), String(playlist.cover || ''),
-    Number(playlist.songCount) || tracks.length, JSON.stringify(tracks), Date.now() + ttl * 1000,
+    playlist.totalCount, JSON.stringify({ cacheVersion: PLAYLIST_CACHE_VERSION,
+      totalCount: playlist.totalCount, partialReason: playlist.partialReason, tracks }), Date.now() + ttl * 1000,
   ).run();
-  return normalizePlaylist(platform, playlistId, playlist, tracks);
+  return playlist;
 }
 
 function titleOf(song) {

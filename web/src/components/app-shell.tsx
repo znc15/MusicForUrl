@@ -6,11 +6,13 @@ import { PageTransition } from '@/motion/primitives';
 import { Skeleton } from '@/components/ui/input';
 import { usePlayer } from '@/stores/player';
 import { useUi } from '@/stores/ui';
+import { activeAnnouncement } from '@/lib/announcements';
 import { routeFromPath } from '@/lib/routes';
 
 // 播放条只有真正打开歌单后才出现，连同它的 Radix Select 一起按需加载
 const MiniPlayer = React.lazy(() => import('@/components/mini-player').then(module => ({ default: module.MiniPlayer })));
 // 登录弹窗只在点击后出现，没必要和首屏一起下载
+const AnnouncementDialog = React.lazy(() => import('@/components/announcement-dialog').then(module => ({ default: module.AnnouncementDialog })));
 const LoginDialog = React.lazy(() => import('@/components/login-dialog').then(module => ({ default: module.LoginDialog })));
 
 function PlayerSlot() {
@@ -39,6 +41,12 @@ export function AppShell() {
   const view = routeFromPath(location.pathname);
   const setSidebar = useUi(state => state.setSidebar);
   const loginOpen = useUi(state => state.loginOpen);
+  const [loginMounted, setLoginMounted] = React.useState(loginOpen);
+  React.useEffect(() => { if (loginOpen) setLoginMounted(true); }, [loginOpen]);
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => useUi.getState().queueAnnouncement(), 800);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // 窄屏没有展开侧栏的余地，进入时强制收起，避免从桌面缩小窗口后留下半截侧栏
   React.useEffect(() => {
@@ -68,11 +76,12 @@ export function AppShell() {
         <PlayerSlot />
       </div>
 
-      {loginOpen && (
+      {loginMounted && (
         <React.Suspense fallback={null}>
           <LoginDialog />
         </React.Suspense>
       )}
+      {activeAnnouncement() && <React.Suspense fallback={null}><AnnouncementDialog /></React.Suspense>}
     </div>
   );
 }

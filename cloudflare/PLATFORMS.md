@@ -28,7 +28,7 @@
 - 不需要登录即可解析公开歌单并生成播放链接。
 - 没有 `users` 行，因此**没有个人歌单、收藏与播放记录**；`/api/<platform>/playlist/user`、`/favorites`、`/history/*` 一律返回 403 并附带原因；`/auth/*` 返回 501（`/auth/status` 除外，它返回 `{logged:false, supported:false}`）。
 - 播放链接是**无状态令牌**：载荷里 `u = 0`、`h = 'guest'`，只验 HMAC 不查库。这同时省掉了每个音频分片请求的一次 D1 读取。代价是没有「退出登录即撤销」——链接有效期内一直可用，与匿名分享链接等价。未登录的酷狗 / 酷我同样走这条路径。
-- 播放记录不写 `play_stats`（没有 `users` 行，外键无法成立），但仍然写入 Analytics Engine，因此会计入「关于」页的匿名汇总。
+- 游客有效播放写入 `playback_events`，`user_id` 为 NULL；同一原子写入更新永久累计，参与全站 30 天排行。游客去重使用服务密钥、Cloudflare 地址和 User-Agent 的哈希，不创建账号记录；`play_stats` 继续仅保存已登录账号的个人历史。界面统计从 D1 读取。
 
 ### 酷狗的上游接口
 
@@ -116,10 +116,13 @@ users(id, platform, platform_user_id, ...)   UNIQUE (platform, platform_user_id)
 | --- | --- | --- |
 | 累计解析歌曲 | `site_stats.parsedSongs` | 每次解析歌单时按曲目数累加（实时） |
 | 生成链接 | `site_stats.generatedLinks` | 每次签发播放链接累加（实时） |
-| 累计播放 / 总播放时长 / 收录曲目 / 歌单数 | 从 `play_stats` 聚合 | cron 与惰性刷新，`STATS_REFRESH_MINUTES` 控制频率（默认 60） |
-| 使用人数 | `users` 行数 | 同上 |
+| 累计有效播放请求 / 估算播放时长 | `playback_totals`；包含游客，按 player/hls/redirect 分类 | 有效事件与触发器原子更新，长期保留；起算点由 `startedAt` 返回 |
+| 30 天曲目 / 歌单数 | `playback_events` 按平台与 ID 去重 | cron 与惰性刷新，`STATS_REFRESH_MINUTES` 默认 60 分钟 |
+| 已登录账号 | `users` 行数，跨平台分别计数 | 同上 |
 
-聚合是一次全表扫描，因此绝不进入请求路径。播放量增长到扫描成本敏感时，把 `STATS_REFRESH_MINUTES` 调大即可，代价只是「关于」页的数字变旧。
+缺失指标以 NULL 和 `unknown` 表示，刷新失败保留可用旧快照并设置 `stale`；首次无可用快照返回 503。未知曲目时长另记覆盖数，旧缓存的默认时长也按未知处理。旧历史原样保留，新累计和精确排行从 0005 迁移时起算。
+
+全站 `/api/stats/top` 按事件时间查询 30 天排行，含游客，边缘缓存 5 分钟并合并冷请求；个人 `/history/top` 独立按登录账号查询。两者均返回周期与起算信息。事件按 30 天清理，永久累计保持。完整口径和升级步骤见 [Cloudflare 指南](README.md#站点统计)。
 
 ## 新增一个平台要改什么
 

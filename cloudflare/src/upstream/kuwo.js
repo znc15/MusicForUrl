@@ -18,6 +18,7 @@ const WEB_ORIGIN = 'https://www.kuwo.cn';
 const ANTI_ORIGIN = 'http://antiserver.kuwo.cn';
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const TOKEN_COOKIE = /^(kw_token|Hm_Iuvt_[A-Za-z0-9]+)$/;
+const PLAYLIST_TRACK_LIMIT = 1000;
 
 class KuwoError extends Error {
   constructor(message, status = 502) {
@@ -79,7 +80,7 @@ function csrfOf(cookie) {
 
 async function playlistApi(env, playlistId, cookie) {
   const query = new URLSearchParams({
-    pid: String(playlistId), pn: '1', rn: '1000', httpsStatus: '1',
+    pid: String(playlistId), pn: '1', rn: String(PLAYLIST_TRACK_LIMIT), httpsStatus: '1',
   });
   const response = await upstreamRequest(`${WEB_ORIGIN}/api/www/playlist/playListInfo?${query}`, {
     headers: headers({
@@ -131,12 +132,17 @@ async function getPlaylistDetail(playlistId, _cookie, env) {
     tracks.push(track);
   }
   if (!tracks.length) throw new KuwoError('这个酷我歌单里没有可播放的歌曲', 404);
+  const totalCount = Math.max(Number(data.total) || 0, tracks.length);
 
   return {
     id: String(playlistId),
     name: String(data.name || '').trim() || `酷我歌单 ${playlistId}`,
     cover: coverUrl(data.pic),
-    songCount: Number(data.total) || tracks.length,
+    songCount: totalCount,
+    totalCount,
+    includedCount: tracks.length,
+    partialReason: tracks.length >= totalCount ? null
+      : list.length >= PLAYLIST_TRACK_LIMIT ? 'platform_limit' : 'missing_tracks',
     tracks,
   };
 }

@@ -11,7 +11,7 @@ export function TabsList({
 }: React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
-      className={cn('inline-flex items-center gap-1 rounded-md bg-muted p-1', className)}
+      className={cn('flex w-fit max-w-full min-w-0 items-center gap-4 overflow-x-auto border-b border-border', className)}
       {...props}
     />
   );
@@ -23,9 +23,9 @@ export function TabsTrigger({
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium',
+        'inline-flex min-h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-1.5 py-2 text-[13px] font-medium',
         'text-muted-foreground transition-colors hover:text-foreground',
-        'data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm',
+        'data-[state=active]:border-primary data-[state=active]:text-primary',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
         className,
       )}
@@ -39,7 +39,7 @@ export function TabsContent({
 }: React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>) {
   return (
     <TabsPrimitive.Content
-      className={cn('mt-4 focus-visible:outline-none', className)}
+      className={cn('dialog-content-enter mt-4 focus-visible:outline-none', className)}
       {...props}
     />
   );

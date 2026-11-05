@@ -6,7 +6,8 @@ import { createPlaybackToken, decryptCookie, getPlaybackUser, getSessionUser, sh
 import { adapter, getPlaylist } from './playlists.js';
 import { PLATFORMS, PLATFORM_IDS, guestUser } from './platforms.js';
 import { recordPlayback } from './playback-history.js';
-import { recordPlayEvent } from './telemetry.js';
+import { recordMediaFailure, recordPlayEvent } from './telemetry.js';
+import { trackMediaTransfer } from './media-transfer.js';
 import { degradeMode } from './degrade.js';
 import { admitControl, admitRefresh } from './request-policy.js';
 
@@ -182,7 +183,7 @@ async function cachedPlaylist(env, user, id, ctx) {
   if (hit && hit.expiresAt > Date.now()) return hit.value;
   const value = await getPlaylist(env, user, id, ctx);
   if (playlistMemo.size >= PLAYLIST_MEMO_MAX) playlistMemo.delete(playlistMemo.keys().next().value);
-  playlistMemo.set(key, { value, expiresAt: Date.now() + PLAYLIST_MEMO_TTL_MS });
+  if (!value.partialReason) playlistMemo.set(key, { value, expiresAt: Date.now() + PLAYLIST_MEMO_TTL_MS });
   return value;
 }
 
@@ -220,15 +221,16 @@ function handlePlayer(request, env, ctx) {
     async media(req, user, song, id, source) {
       const response = await proxyPlayerSource(req, env, ctx, user, song.id, source);
       if (req.method === 'HEAD') return response;
-      return cache.trackTransfer(response, () => ctx.waitUntil(
-        (user.guest ? Promise.resolve() : recordPlayback(env, user.id, id, song))
-          .then(() => recordPlayEvent(env, {
+      return trackMediaTransfer(response, () => ctx.waitUntil(
+        recordPlayback(env, user, id, song, Date.now(), { request: req, surface: 'player' })
+          .then(admitted => admitted && recordPlayEvent(env, {
             platform: user.platform, userId: user.id, playlistId: id, song,
             quality: source.quality, format: source.format, bitrate: source.bitrate,
             trial: source.trial, surface: 'player',
             cacheState: response.headers.get('x-mfu-cache') || '', colo: req.cf?.colo,
           }))
-          .catch(error => console.error('[Player history]', error.message))));
+          .catch(error => console.error('[Player history]', error.message))),
+        failure => recordMediaFailure(env, req, new URL(req.url), failure, { platform: user.platform }));
     },
   };
   return playerApi.createPlayerApi(services)(request);

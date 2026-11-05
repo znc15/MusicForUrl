@@ -26,14 +26,22 @@ export interface PlatformCapability {
 }
 
 export interface SiteStats {
-  parsedSongs: number;
-  generatedLinks: number;
-  plays: number;
-  playDurationMs: number;
-  listeners: number;
-  songs: number;
-  playlists: number;
+  parsedSongs: number | null;
+  generatedLinks: number | null;
+  plays: number | null;
+  playDurationMs: number | null;
+  listeners: number | null;
+  songs: number | null;
+  playlists: number | null;
   updatedAt: number;
+  version?: number;
+  startedAt?: number | null;
+  stale?: boolean;
+  unknown?: string[];
+  knownDurationPlays?: number | null;
+  unknownDurationPlays?: number | null;
+  playSources?: { player: number; hls: number; redirect: number };
+  rankingWindowDays?: number;
 }
 
 export interface PlaylistSummary {
@@ -42,6 +50,9 @@ export interface PlaylistSummary {
   cover: string;
   songCount?: number;
   trackCount?: number;
+  totalCount?: number;
+  includedCount?: number;
+  partialReason?: 'upstream_page_failed' | 'platform_limit' | 'missing_tracks' | null;
 }
 
 export interface FavoriteItem {
@@ -79,6 +90,7 @@ export interface GeneratedLink {
   urls: UrlOption[];
   default: string;
   playlist?: PlaylistSummary;
+  expiresAt?: number;
 }
 
 export interface QualityOption {

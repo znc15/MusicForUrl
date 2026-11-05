@@ -10,6 +10,7 @@ import { adapter, parsePlaylistId, validPlaylistId, validSongId } from '../src/p
 import { PLATFORMS, capabilityMatrix, guestUser, platformFromPath } from '../src/platforms.js';
 import { routeKey } from '../src/telemetry.js';
 import { readSiteStats, refreshSiteStats } from '../src/stats.js';
+import { recordPlayback } from '../src/playback-history.js';
 import { upstreamRequest } from '../src/upstream/request.js';
 
 const KUGOU_HASH = 'F460C7B867DCC5F49A0FB9574954CFD7';
@@ -291,6 +292,9 @@ test('guest platforms serve a full generate → m3u8 → segment chain without a
   assert.equal(segment.status, 302);
   assert.equal(segment.headers.get('location'), 'https://fs.kgimg.com/a.mp3');
   await Promise.all(pending);
+  assert.equal(env.sqlite.prepare('SELECT plays FROM playback_totals').get().plays, 1);
+  assert.equal(env.sqlite.prepare('SELECT redirect_plays FROM playback_totals').get().redirect_plays, 1);
+  assert.equal(env.sqlite.prepare('SELECT user_id FROM playback_events').get().user_id, null);
 
   // 游客没有 users 行，播放记录不会写进 play_stats，但解析数与签发链接数都会累加
   assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS total FROM play_stats').get().total, 0);
@@ -446,7 +450,7 @@ test('kuwo password and SMS login map upstream cookies into a session', async t 
   assert.equal(bodies.at(-1).tm, 'TM1');
 });
 
-test('site stats are aggregated from play history and account count', async t => {
+test('site stats combine permanent admitted requests, recent catalog and account count', async t => {
   const env = testEnv(); t.after(() => env.sqlite.close());
   const now = Date.now();
   const user = await env.DB.prepare(`
@@ -454,10 +458,10 @@ test('site stats are aggregated from play history and account count', async t =>
       token_hash, token_expires_at_ms, created_at_ms, last_login_at_ms)
     VALUES ('netease', '1001', '', '', 0, '', 'h', ?, ?, ?) RETURNING id
   `).bind(now + 1000, now, now).first();
-  await env.DB.prepare(`
-    INSERT INTO play_stats (user_id, playlist_id, song_id, song_name, artist, duration_ms, play_count, last_played_at_ms)
-    VALUES (?, '1', 'a', 'A', '', 200000, 3, ?), (?, '2', 'b', 'B', '', 100000, 1, ?)
-  `).bind(user.id, now, user.id, now).run();
+  for (let i = 2; i >= 0; i--) {
+    await recordPlayback(env, user.id, '1', { id: 'a', name: 'A', duration: 200 }, now - i * 300001);
+  }
+  await recordPlayback(env, user.id, '2', { id: 'b', name: 'B', duration: 100 }, now);
 
   const stats = await readSiteStats(env);
   assert.equal(stats.plays, 4);

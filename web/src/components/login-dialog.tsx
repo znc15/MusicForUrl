@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input, Label, Textarea } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Segmented } from '@/motion/primitives';
+import { useLoginTask } from '@/hooks/use-login-task';
 import { useAuth } from '@/stores/auth';
 import { useUi } from '@/stores/ui';
 
@@ -24,11 +25,13 @@ const QR_MESSAGES: Record<number, string> = {
 
 function delay(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => {
+    if (signal.aborted) { reject(new DOMException('aborted', 'AbortError')); return; }
+    const abort = () => {
       clearTimeout(timer);
       reject(new DOMException('aborted', 'AbortError'));
-    }, { once: true });
+    };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms);
+    signal.addEventListener('abort', abort, { once: true });
   });
 }
 
@@ -38,26 +41,25 @@ function QrPanel({ platform, onSuccess }: {
 }) {
   const [image, setImage] = React.useState('');
   const [status, setStatus] = React.useState('正在获取二维码…');
-  const abortRef = React.useRef<AbortController | null>(null);
+  const begin = useLoginTask();
 
   const start = React.useCallback(async () => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const task = begin();
+    if (!task.isCurrent()) return;
     setImage('');
     setStatus('正在获取二维码…');
     try {
-      const { key, qrimg } = await api.qrcode(platform);
-      if (controller.signal.aborted) return;
+      const { key, qrimg } = await api.qrcode(platform, task.signal);
+      if (!task.isCurrent()) return;
       setImage(qrimg);
       setStatus('请使用手机 App 扫码');
       for (let attempt = 0; attempt < QR_MAX_POLLS; attempt++) {
-        await delay(QR_POLL_MS, controller.signal);
-        if (controller.signal.aborted) return;
+        await delay(QR_POLL_MS, task.signal);
+        if (!task.isCurrent()) return;
         // 后台标签页不轮询，但仍占用轮询次数上限，避免切回来时无限延长
         if (document.hidden) continue;
-        const result = await api.qrcodeCheck(platform, key, controller.signal);
-        if (controller.signal.aborted) return;
+        const result = await api.qrcodeCheck(platform, key, task.signal);
+        if (!task.isCurrent()) return;
         if (result.code === 803 && result.data) {
           onSuccess(result.data.token, result.data.user);
           return;
@@ -67,13 +69,12 @@ function QrPanel({ platform, onSuccess }: {
       }
       setStatus('二维码已过期，请刷新');
     } catch (error) {
-      if (controller.signal.aborted || (error as Error)?.name === 'AbortError') return;
+      if (!task.isCurrent() || (error as Error)?.name === 'AbortError') return;
       setStatus(error instanceof Error ? error.message : '二维码获取失败');
     }
-  }, [platform, onSuccess]);
+  }, [platform, onSuccess, begin]);
 
   React.useEffect(() => { void start(); }, [start]);
-  React.useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
     <div className="flex flex-col items-center gap-3 py-2">
@@ -95,30 +96,37 @@ function CaptchaPanel({ platform, onSuccess }: {
   const [phone, setPhone] = React.useState('');
   const [captcha, setCaptcha] = React.useState('');
   const [sending, setSending] = React.useState(false);
+  const beginSend = useLoginTask();
   const [busy, setBusy] = React.useState(false);
+  const beginSubmit = useLoginTask();
 
   async function send() {
+    const task = beginSend();
+    if (!task.isCurrent()) return;
     setSending(true);
     try {
-      await api.sendCaptcha(platform, phone);
-      toast.success('验证码已发送');
+      await api.sendCaptcha(platform, phone, task.signal);
+      if (task.isCurrent()) toast.success('验证码已发送');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '验证码发送失败');
+      if (task.isCurrent()) toast.error(error instanceof Error ? error.message : '验证码发送失败');
     } finally {
-      setSending(false);
+      if (task.isCurrent()) setSending(false);
     }
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const task = beginSubmit();
+    if (!task.isCurrent()) return;
     setBusy(true);
     try {
-      const { token, user } = await api.loginCaptcha(platform, phone, captcha);
-      onSuccess(token, user);
+      const { token, user } = await api.loginCaptcha(platform, phone, captcha, task.signal);
+      if (task.isCurrent()) onSuccess(token, user);
     } catch (error) {
+      if (!task.isCurrent()) return;
       toast.error(error instanceof Error ? error.message : '登录失败');
     } finally {
-      setBusy(false);
+      if (task.isCurrent()) setBusy(false);
     }
   }
 
@@ -151,17 +159,21 @@ function PasswordPanel({ platform, onSuccess }: {
   const [phone, setPhone] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const beginSubmit = useLoginTask();
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const task = beginSubmit();
+    if (!task.isCurrent()) return;
     setBusy(true);
     try {
-      const { token, user } = await api.loginPassword(platform, phone, password);
-      onSuccess(token, user);
+      const { token, user } = await api.loginPassword(platform, phone, password, task.signal);
+      if (task.isCurrent()) onSuccess(token, user);
     } catch (error) {
+      if (!task.isCurrent()) return;
       toast.error(error instanceof Error ? error.message : '登录失败');
     } finally {
-      setBusy(false);
+      if (task.isCurrent()) setBusy(false);
     }
   }
 
@@ -188,17 +200,21 @@ function CookiePanel({ platform, onSuccess }: {
 }) {
   const [cookie, setCookie] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const beginSubmit = useLoginTask();
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const task = beginSubmit();
+    if (!task.isCurrent()) return;
     setBusy(true);
     try {
-      const { token, user } = await api.loginCookie(platform, cookie.trim());
-      onSuccess(token, user);
+      const { token, user } = await api.loginCookie(platform, cookie.trim(), task.signal);
+      if (task.isCurrent()) onSuccess(token, user);
     } catch (error) {
+      if (!task.isCurrent()) return;
       toast.error(error instanceof Error ? error.message : '登录失败');
     } finally {
-      setBusy(false);
+      if (task.isCurrent()) setBusy(false);
     }
   }
 
@@ -208,7 +224,6 @@ function CookiePanel({ platform, onSuccess }: {
         <Label htmlFor="login-cookie">Cookie</Label>
         <Textarea id="login-cookie" value={cookie} onChange={event => setCookie(event.target.value)}
           placeholder="粘贴浏览器中的完整 Cookie" required />
-        <p className="text-xs text-muted-foreground">Cookie 会加密后保存在服务端，仅用于解析歌单与获取音源。</p>
       </div>
       <Button type="submit" disabled={busy}>{busy ? '登录中…' : '登录'}</Button>
     </form>
@@ -221,18 +236,23 @@ type KuwoCaptchaState = { img: string; token: string; cookie: string };
 function useKuwoCaptcha() {
   const [captcha, setCaptcha] = React.useState<KuwoCaptchaState | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const begin = useLoginTask();
 
   const refresh = React.useCallback(async () => {
+    const task = begin();
+    if (!task.isCurrent()) return;
     setLoading(true);
     try {
-      setCaptcha(await api.authCaptcha('kuwo'));
+      const value = await api.authCaptcha('kuwo', task.signal);
+      if (task.isCurrent()) setCaptcha(value);
     } catch (error) {
+      if (!task.isCurrent()) return;
       setCaptcha(null);
       toast.error(error instanceof Error ? error.message : '获取验证码失败');
     } finally {
-      setLoading(false);
+      if (task.isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [begin]);
 
   React.useEffect(() => { void refresh(); }, [refresh]);
   return { captcha, loading, refresh };
@@ -268,23 +288,27 @@ function KuwoPasswordPanel({ onSuccess }: {
   const [password, setPassword] = React.useState('');
   const [verifyCode, setVerifyCode] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const beginSubmit = useLoginTask();
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!captcha) { toast.error('验证码未加载，请点击图片刷新'); return; }
+    const task = beginSubmit();
+    if (!task.isCurrent()) return;
     setBusy(true);
     try {
       const { token, user } = await api.loginByPassword('kuwo', {
         uname: uname.trim(), password, verifyCode: verifyCode.trim(),
         verifyCodeToken: captcha.token, cookie: captcha.cookie,
-      });
-      onSuccess(token, user);
+      }, task.signal);
+      if (task.isCurrent()) onSuccess(token, user);
     } catch (error) {
+      if (!task.isCurrent()) return;
       toast.error(error instanceof Error ? error.message : '登录失败');
       setVerifyCode('');
       void refresh();
     } finally {
-      setBusy(false);
+      if (task.isCurrent()) setBusy(false);
     }
   }
 
@@ -322,7 +346,9 @@ function KuwoSmsPanel({ onSuccess }: {
   const [smsCode, setSmsCode] = React.useState('');
   const [tm, setTm] = React.useState('');
   const [sending, setSending] = React.useState(false);
+  const beginSend = useLoginTask();
   const [busy, setBusy] = React.useState(false);
+  const beginSubmit = useLoginTask();
   const [cooldown, setCooldown] = React.useState(0);
 
   React.useEffect(() => {
@@ -334,20 +360,24 @@ function KuwoSmsPanel({ onSuccess }: {
   async function send() {
     if (!captcha) { toast.error('验证码未加载，请点击图片刷新'); return; }
     if (!/^1\d{10}$/.test(mobile.trim())) { toast.error('请输入 11 位中国大陆手机号'); return; }
+    const task = beginSend();
+    if (!task.isCurrent()) return;
     setSending(true);
     try {
       const result = await api.sendLoginSms('kuwo', {
         mobile: mobile.trim(), verifyCode: verifyCode.trim(),
         verifyCodeToken: captcha.token, cookie: captcha.cookie,
-      });
+      }, task.signal);
+      if (!task.isCurrent()) return;
       setTm(result.tm);
       setCooldown(60);
       toast.success('短信验证码已发送');
     } catch (error) {
+      if (!task.isCurrent()) return;
       toast.error(error instanceof Error ? error.message : '发送失败');
       void refresh();
     } finally {
-      setSending(false);
+      if (task.isCurrent()) setSending(false);
     }
   }
 
@@ -355,17 +385,20 @@ function KuwoSmsPanel({ onSuccess }: {
     event.preventDefault();
     if (!captcha) { toast.error('验证码已失效，请刷新'); return; }
     if (!tm) { toast.error('请先获取短信验证码'); return; }
+    const task = beginSubmit();
+    if (!task.isCurrent()) return;
     setBusy(true);
     try {
       const { token, user } = await api.loginBySms('kuwo', {
         mobile: mobile.trim(), verifyCode: verifyCode.trim(), smsCode: smsCode.trim(),
         tm, cookie: captcha.cookie,
-      });
-      onSuccess(token, user);
+      }, task.signal);
+      if (task.isCurrent()) onSuccess(token, user);
     } catch (error) {
+      if (!task.isCurrent()) return;
       toast.error(error instanceof Error ? error.message : '登录失败');
     } finally {
-      setBusy(false);
+      if (task.isCurrent()) setBusy(false);
     }
   }
 
@@ -406,12 +439,16 @@ export function LoginDialog() {
   const closeLogin = useUi(state => state.closeLogin);
   const setPlatform = useUi(state => state.openLogin);
   const adopt = useAuth(state => state.adopt);
+  const epoch = useUi(state => state.loginEpoch);
+  const restartLogin = useUi(state => state.restartLogin);
 
   const handleSuccess = React.useCallback((target: Platform) => (token: string, user: AccountUser) => {
+    const current = useUi.getState();
+    if (!current.loginOpen || current.loginEpoch !== epoch || current.loginPlatform !== target) return;
     adopt(target, token, user);
     toast.success(`已登录 ${user.nickname || platformLabel(target)}`);
     closeLogin();
-  }, [adopt, closeLogin]);
+  }, [adopt, closeLogin, epoch]);
 
   // 每个平台的成功回调都要稳定引用，否则二维码面板会被反复重挂
   const handlers = React.useMemo(
@@ -436,31 +473,33 @@ export function LoginDialog() {
           options={ACCOUNT_PLATFORMS.map(item => ({ value: item.id, label: item.label }))}
         />
 
+        <div key={active} className="dialog-content-enter">
         {active === 'netease' ? (
-          <Tabs defaultValue="qrcode">
+          <Tabs defaultValue="qrcode" onValueChange={restartLogin}>
             <TabsList className="w-full">
               <TabsTrigger value="qrcode">扫码</TabsTrigger>
               <TabsTrigger value="captcha">验证码</TabsTrigger>
               <TabsTrigger value="password">密码</TabsTrigger>
               <TabsTrigger value="cookie">Cookie</TabsTrigger>
             </TabsList>
-            <TabsContent value="qrcode"><QrPanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
-            <TabsContent value="captcha"><CaptchaPanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
-            <TabsContent value="password"><PasswordPanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
-            <TabsContent value="cookie"><CookiePanel platform="netease" onSuccess={handlers.netease} /></TabsContent>
+            <TabsContent value="qrcode"><QrPanel key={epoch} platform="netease" onSuccess={handlers.netease} /></TabsContent>
+            <TabsContent value="captcha"><CaptchaPanel key={epoch} platform="netease" onSuccess={handlers.netease} /></TabsContent>
+            <TabsContent value="password"><PasswordPanel key={epoch} platform="netease" onSuccess={handlers.netease} /></TabsContent>
+            <TabsContent value="cookie"><CookiePanel key={epoch} platform="netease" onSuccess={handlers.netease} /></TabsContent>
           </Tabs>
         ) : active === 'kuwo' ? (
-          <Tabs defaultValue="password">
+          <Tabs defaultValue="password" onValueChange={restartLogin}>
             <TabsList className="w-full">
               <TabsTrigger value="password">账号密码</TabsTrigger>
               <TabsTrigger value="sms">手机短信</TabsTrigger>
             </TabsList>
-            <TabsContent value="password"><KuwoPasswordPanel onSuccess={handlers.kuwo} /></TabsContent>
-            <TabsContent value="sms"><KuwoSmsPanel onSuccess={handlers.kuwo} /></TabsContent>
+            <TabsContent value="password"><KuwoPasswordPanel key={epoch} onSuccess={handlers.kuwo} /></TabsContent>
+            <TabsContent value="sms"><KuwoSmsPanel key={epoch} onSuccess={handlers.kuwo} /></TabsContent>
           </Tabs>
         ) : (
-          <QrPanel platform={active} onSuccess={handlers[active]} />
+          <QrPanel key={epoch} platform={active} onSuccess={handlers[active]} />
         )}
+        </div>
 
       </DialogContent>
     </Dialog>

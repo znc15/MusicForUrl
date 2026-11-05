@@ -2,7 +2,7 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 export function PageHeader({
-  eyebrow, title, description, actions, className,
+  title, description, actions, className,
 }: {
   eyebrow?: string;
   title: string;
@@ -13,9 +13,6 @@ export function PageHeader({
   return (
     <div className={cn('flex flex-wrap items-end justify-between gap-3', className)}>
       <div className="min-w-0">
-        {eyebrow && (
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{eyebrow}</p>
-        )}
         <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-tight">{title}</h1>
         {description && <p className="mt-1.5 text-[13px] text-muted-foreground">{description}</p>}
       </div>

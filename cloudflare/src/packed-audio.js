@@ -1,4 +1,5 @@
 import { allowedAudioUrl } from './playlists.js';
+import { trackMediaTransfer } from './media-transfer.js';
 
 const encoder = new TextEncoder();
 const TIMESTAMP_OWNER = 'com.apple.streaming.transportStreamTimestamp';
@@ -34,11 +35,11 @@ function audioLength(headers) {
   return value && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
 }
 
-async function fetchAudio(destination, platform, head, fetchImpl) {
+async function fetchAudio(destination, platform, head, fetchImpl, signal) {
   let url = allowedAudioUrl(destination, platform);
   for (let redirect = 0; redirect <= 3 && url; redirect++) {
     const response = await fetchImpl(url, {
-      method: 'GET', redirect: 'manual',
+      method: 'GET', redirect: 'manual', signal,
       headers: { 'accept-encoding': 'identity', ...(head ? { range: 'bytes=0-4095' } : {}) },
     });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
@@ -57,9 +58,14 @@ function audioError(message, status) {
   } });
 }
 
-async function packedAudioResponse(request, destination, platform, fetchImpl = fetch, onComplete = () => {}) {
+async function packedAudioResponse(request, destination, platform, fetchImpl = fetch, onComplete = () => {}, onFailure = () => {}) {
   const head = request.method === 'HEAD';
-  const upstream = await fetchAudio(destination, platform, head, fetchImpl);
+  let upstream;
+  try {
+    upstream = await fetchAudio(destination, platform, head, fetchImpl, request.signal);
+  } catch (_) {
+    return audioError(request.signal.aborted ? 'Playback cancelled' : 'Audio source is unavailable', request.signal.aborted ? 499 : 502);
+  }
   if (!upstream?.ok || !upstream.body) {
     await upstream?.body?.cancel();
     return audioError('Audio source is unavailable', 502);
@@ -67,11 +73,17 @@ async function packedAudioResponse(request, destination, platform, fetchImpl = f
   const reader = upstream.body.getReader();
   const leading = [];
   let leadingLength = 0;
-  while (leadingLength < 3) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    leading.push(chunk.value);
-    leadingLength += chunk.value.length;
+  try {
+    while (leadingLength < 3) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      leading.push(chunk.value);
+      leadingLength += chunk.value.length;
+    }
+  } catch (_) {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+    return audioError(request.signal.aborted ? 'Playback cancelled' : 'Audio source is unavailable', request.signal.aborted ? 499 : 502);
   }
   const bytes = leading.length === 1 ? leading[0] : new Uint8Array(leadingLength);
   if (leading.length > 1) {
@@ -82,6 +94,7 @@ async function packedAudioResponse(request, destination, platform, fetchImpl = f
   const mp3 = bytes?.[0] === 0xff && (bytes?.[1] & 0xe0) === 0xe0 && (bytes?.[1] & 6) === 2;
   if (!id3 && !mp3) {
     await reader.cancel();
+    reader.releaseLock();
     return audioError('Packed audio requires an MP3 source', 415);
   }
   // Each song has EXT-X-DISCONTINUITY, so its media timeline can start at zero.
@@ -96,24 +109,25 @@ async function packedAudioResponse(request, destination, platform, fetchImpl = f
   if (length !== null) headers.set('content-length', String(length + timestamp.length));
   if (head) {
     await reader.cancel();
+    reader.releaseLock();
     return new Response(null, { headers });
   }
-  const fixed = length !== null && typeof globalThis.FixedLengthStream === 'function'
-    ? new globalThis.FixedLengthStream(length + timestamp.length) : null;
   const body = new ReadableStream({
     start(controller) { controller.enqueue(timestamp); controller.enqueue(bytes); },
     async pull(controller) {
       try {
         const chunk = await reader.read();
-        if (chunk.done) { reader.releaseLock(); controller.close(); onComplete(); }
+        if (chunk.done) { reader.releaseLock(); controller.close(); }
         else controller.enqueue(chunk.value);
-      } catch (error) { controller.error(error); }
+      } catch (error) { reader.releaseLock(); controller.error(error); }
     },
-    cancel(reason) { return reader.cancel(reason); },
-  });
-  // Workers derives Content-Length from the stream type, not a manually set header.
-  if (fixed) body.pipeTo(fixed.writable).catch(() => {});
-  return new Response(fixed?.readable || body, { headers });
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => {});
+      reader.releaseLock();
+    },
+  }, { highWaterMark: 0 });
+  return trackMediaTransfer(new Response(body, { headers }), onComplete,
+    failure => onFailure(request.signal.aborted ? 'cancelled' : failure));
 }
 
 export { packedAudioResponse, packedAudioTimestamp };

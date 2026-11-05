@@ -9,18 +9,35 @@ export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
 
 export function DialogContent({
-  className, children, ...props
+  className, children, onOpenAutoFocus, onCloseAutoFocus, ...props
 }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>) {
+  const returnFocus = React.useRef<HTMLElement | null>(null);
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45" />
+      <DialogPrimitive.Overlay className="dialog-overlay fixed inset-0 z-50 bg-black/45" />
       <DialogPrimitive.Content
         className={cn(
-          'fixed left-1/2 top-1/2 z-50 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2',
+          'dialog-surface fixed left-1/2 top-1/2 z-50 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2',
           'max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-card p-5 shadow-lg focus:outline-none',
           className,
         )}
         {...props}
+        onOpenAutoFocus={event => {
+          returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          onOpenAutoFocus?.(event);
+        }}
+        onCloseAutoFocus={event => {
+          onCloseAutoFocus?.(event);
+          if (event.defaultPrevented) return;
+          // A higher-priority dialog may have opened during this one's exit animation.
+          if (document.querySelector('[role="dialog"][data-state="open"]')) {
+            event.preventDefault();
+            return;
+          }
+          const target = returnFocus.current?.isConnected && returnFocus.current !== document.body
+            ? returnFocus.current : document.querySelector<HTMLElement>('[data-announcement-trigger]');
+          if (target) { event.preventDefault(); target.focus({ preventScroll: true }); }
+        }}
       >
         {children}
         <DialogPrimitive.Close

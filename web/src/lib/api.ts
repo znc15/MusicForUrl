@@ -87,8 +87,8 @@ export const api = {
       .then(() => undefined);
   },
 
-  qrcode(platform: Platform) {
-    return request<{ data: { key: string; qrimg: string } }>(apiPath(platform, '/auth/qrcode'), platform)
+  qrcode(platform: Platform, signal?: AbortSignal) {
+    return request<{ data: { key: string; qrimg: string } }>(apiPath(platform, '/auth/qrcode'), platform, { signal })
       .then(result => result.data);
   },
   qrcodeCheck(platform: Platform, key: string, signal?: AbortSignal) {
@@ -96,52 +96,52 @@ export const api = {
       apiPath(platform, `/auth/qrcode/check${query({ key })}`), platform, { signal },
     );
   },
-  sendCaptcha(platform: Platform, phone: string) {
+  sendCaptcha(platform: Platform, phone: string, signal?: AbortSignal) {
     return request<{ success: boolean; message: string }>(
-      apiPath(platform, '/auth/captcha/send'), platform, { method: 'POST', body: { phone } },
+      apiPath(platform, '/auth/captcha/send'), platform, { method: 'POST', body: { phone }, signal },
     );
   },
-  loginCaptcha(platform: Platform, phone: string, captcha: string) {
+  loginCaptcha(platform: Platform, phone: string, captcha: string, signal?: AbortSignal) {
     return request<{ data: { token: string; user: AccountUser } }>(
-      apiPath(platform, '/auth/login/captcha'), platform, { method: 'POST', body: { phone, captcha } },
+      apiPath(platform, '/auth/login/captcha'), platform, { method: 'POST', body: { phone, captcha }, signal },
     ).then(result => result.data);
   },
-  loginPassword(platform: Platform, phone: string, password: string) {
+  loginPassword(platform: Platform, phone: string, password: string, signal?: AbortSignal) {
     return request<{ data: { token: string; user: AccountUser } }>(
-      apiPath(platform, '/auth/login/password'), platform, { method: 'POST', body: { phone, password } },
+      apiPath(platform, '/auth/login/password'), platform, { method: 'POST', body: { phone, password }, signal },
     ).then(result => result.data);
   },
-  loginCookie(platform: Platform, cookie: string) {
+  loginCookie(platform: Platform, cookie: string, signal?: AbortSignal) {
     return request<{ data: { token: string; user: AccountUser } }>(
-      apiPath(platform, '/auth/login/cookie'), platform, { method: 'POST', body: { cookie } },
+      apiPath(platform, '/auth/login/cookie'), platform, { method: 'POST', body: { cookie }, signal },
     ).then(result => result.data);
   },
 
   // 酷我：账号密码 / 手机短信。图形验证码的 token 与 cookie 必须原样带回。
-  authCaptcha(platform: Platform) {
+  authCaptcha(platform: Platform, signal?: AbortSignal) {
     return request<{ data: { img: string; token: string; cookie: string } }>(
-      apiPath(platform, '/auth/captcha'), platform,
+      apiPath(platform, '/auth/captcha'), platform, { signal },
     ).then(result => result.data);
   },
   loginByPassword(platform: Platform, payload: {
     uname: string; password: string; verifyCode: string; verifyCodeToken: string; cookie: string;
-  }) {
+  }, signal?: AbortSignal) {
     return request<{ data: { token: string; user: AccountUser } }>(
-      apiPath(platform, '/auth/login/password'), platform, { method: 'POST', body: payload },
+      apiPath(platform, '/auth/login/password'), platform, { method: 'POST', body: payload, signal },
     ).then(result => result.data);
   },
   sendLoginSms(platform: Platform, payload: {
     mobile: string; verifyCode: string; verifyCodeToken: string; cookie: string;
-  }) {
+  }, signal?: AbortSignal) {
     return request<{ data: { tm: string } }>(
-      apiPath(platform, '/auth/sms/send'), platform, { method: 'POST', body: payload },
+      apiPath(platform, '/auth/sms/send'), platform, { method: 'POST', body: payload, signal },
     ).then(result => result.data);
   },
   loginBySms(platform: Platform, payload: {
     mobile: string; verifyCode: string; smsCode: string; tm: string; cookie: string;
-  }) {
+  }, signal?: AbortSignal) {
     return request<{ data: { token: string; user: AccountUser } }>(
-      apiPath(platform, '/auth/login/sms'), platform, { method: 'POST', body: payload },
+      apiPath(platform, '/auth/login/sms'), platform, { method: 'POST', body: payload, signal },
     ).then(result => result.data);
   },
 
@@ -190,6 +190,12 @@ export const api = {
   stats(): Promise<SiteStats> {
     return request<{ data: SiteStats }>('/api/stats', 'netease').then(result => result.data);
   },
+  statsTop(): Promise<{
+    data: Array<TopSong & { platform: Platform }>;
+    stale?: boolean; updatedAt?: number; windowDays: number; startedAt?: number; since?: number;
+  }> {
+    return request('/api/stats/top', 'netease');
+  },
   playerPlaylist(platform: Platform, playlistId: string, grant = '', signal?: AbortSignal): Promise<PlayerPlaylist> {
     return request<{ data: PlayerPlaylist }>(
       `/api/player/playlist${query({ platform, id: playlistId, grant })}`, platform, { token: grant || undefined, signal },
@@ -219,7 +225,9 @@ export function parseStreamUrl(value: string): { platform: Platform; playlistId:
   const match = url.pathname.match(/^\/api\/(qq|kugou|kuwo)?\/?playlist\/m3u8\/([^/]+)\/(\d{1,20})\/stream\.m3u8$/);
   if (!match) return null;
   const platform = (match[1] ?? 'netease') as Platform;
-  return { platform, grant: decodeURIComponent(match[2]), playlistId: match[3] };
+  try {
+    return { platform, grant: decodeURIComponent(match[2]), playlistId: match[3] };
+  } catch { return null; }
 }
 
 export { platformInfo };

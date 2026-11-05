@@ -120,7 +120,8 @@ async function fetchSongPage(playlistId, page, signal) {
   });
   const body = await fetchJson(`${SONG_ORIGIN}/api/v3/special/song?${query}`, signal);
   const info = body?.data?.info;
-  return Array.isArray(info) ? info : [];
+  if (!Array.isArray(info)) throw new KugouError('酷狗歌单分页数据不完整');
+  return info;
 }
 
 async function getPlaylistDetail(playlistId, _cookie, env) {
@@ -130,6 +131,7 @@ async function getPlaylistDetail(playlistId, _cookie, env) {
   const pages = Math.min(maxPages(env), Math.max(1, pageCount));
 
   let raw = [];
+  let partialReason = null;
   try {
     for (let page = 1; page <= pages; page++) {
       const info = await fetchSongPage(playlistId, page, signal);
@@ -137,9 +139,9 @@ async function getPlaylistDetail(playlistId, _cookie, env) {
       raw.push(...info);
     }
   } catch (error) {
-    // 分页接口整体失败时退回元数据里的前 10 首，功能降级而不是直接不可用
+    // 中途失败保留成功分页；只有一页也没读到时才使用元数据里的前 10 首。
     console.warn(`[Kugou] pagination failed for ${playlistId}: ${error.message}`);
-    raw = fallback;
+    partialReason = 'upstream_page_failed';
   }
   if (!raw.length) raw = fallback;
   if (raw.length && raw.length < total) {
@@ -164,12 +166,18 @@ async function getPlaylistDetail(playlistId, _cookie, env) {
     const track = trackOf(item, hashes);
     if (track) tracks.push(track);
   }
+  const totalCount = Math.max(total, tracks.length);
+  partialReason = tracks.length >= totalCount ? null : partialReason
+    || (pageCount > pages && raw.length >= pages * PAGE_SIZE ? 'platform_limit' : 'missing_tracks');
 
   return {
     id: String(playlistId),
     name: String(meta.specialname || '').trim() || `酷狗歌单 ${playlistId}`,
     cover: coverUrl(meta.imgurl),
-    songCount: total || tracks.length,
+    songCount: totalCount,
+    totalCount,
+    includedCount: tracks.length,
+    partialReason,
     tracks,
   };
 }

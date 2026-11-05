@@ -2,23 +2,25 @@ import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Copy, Heart, Library, Link2, MonitorPlay } from 'lucide-react';
+import { Heart, Library, Link2, MonitorPlay } from 'lucide-react';
 import { accountQueryKey, queryClient, removeCachedFavorite } from '@/lib/query-client';
 import { EmptyState } from '@/components/page-header';
 import { api } from '@/lib/api';
-import { PLAYBACK_PLATFORMS, isPlatform, platformInfo, platformLabel } from '@/lib/platforms';
+import { PLAYBACK_PLATFORMS, isPlatform, platformInfo } from '@/lib/platforms';
 import { readGeneratorPlatform, writeGeneratorPlatform } from '@/lib/storage';
 import type { GeneratedLink, Platform } from '@/lib/types';
 
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/input';
 import { CoverArt, PlaylistCard } from '@/components/playlist-card';
+import { PlaylistLinkActions, usePlaylistDetails } from '@/components/playlist-details';
 import { ListItem, ListReveal, Segmented } from '@/motion/primitives';
 import { useAuth } from '@/stores/auth';
 import { usePlayer } from '@/stores/player';
 import { useUi } from '@/stores/ui';
 
 function RecentGrid({ platform }: { platform: Platform }) {
+  const { openDetails, details } = usePlaylistDetails(platform);
   const info = platformInfo(platform);
   const user = useAuth(state => state.users[platform]);
   const token = useAuth(state => state.tokens[platform]);
@@ -43,6 +45,7 @@ function RecentGrid({ platform }: { platform: Platform }) {
 
   return (
     <section>
+      {details}
       <div className="mb-3.5 flex items-baseline justify-between">
         <h2 className="text-base font-semibold">最近播放</h2>
         <Link to="/user" className="text-[12.5px] font-medium text-primary hover:underline">查看全部 →</Link>
@@ -72,7 +75,8 @@ function RecentGrid({ platform }: { platform: Platform }) {
                 name={item.name}
                 cover={item.cover}
                 meta={`${item.playCount} 次播放`}
-                onOpen={() => void play(item.playlistId)}
+                onOpen={() => openDetails({ ...item, id: item.playlistId })}
+                onPlay={() => void play(item.playlistId)}
               />
             </ListItem>
           ))}
@@ -85,6 +89,8 @@ function RecentGrid({ platform }: { platform: Platform }) {
 export function HomeView() {
   const [platform, setPlatform] = React.useState<Platform>(readGeneratorPlatform);
   const [input, setInput] = React.useState('');
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const [inputError, setInputError] = React.useState('');
   const [resultState, setResult] = React.useState<{ data: GeneratedLink; platform: Platform; token: string } | null>(null);
   const [favorited, setFavorited] = React.useState(false);
   const [updatingFavorite, setUpdatingFavorite] = React.useState(false);
@@ -110,10 +116,12 @@ export function HomeView() {
     writeGeneratorPlatform(next);
     setResult(null);
     setFavorited(false);
+    setInputError('');
   }
 
   const generate = React.useCallback(async (raw: string, target: Platform) => {
-    if (!raw.trim()) return;
+    if (!raw.trim()) { setInputError('请粘贴歌单链接或输入歌单 ID'); inputRef.current?.focus(); return; }
+    setInputError('');
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
@@ -131,7 +139,7 @@ export function HomeView() {
         : false;
       if (current()) setFavorited(favorite);
     } catch (error) {
-      if (current()) toast.error(error instanceof Error ? error.message : '生成失败');
+      if (current()) setInputError(error instanceof Error ? error.message : '生成失败，请重试');
     } finally {
       if (requestRef.current === controller) setBusy(false);
     }
@@ -181,16 +189,6 @@ export function HomeView() {
     }
   }
 
-  async function copyLink() {
-    if (!result) return;
-    try {
-      await navigator.clipboard.writeText(result.url);
-      toast.success('链接已复制');
-    } catch {
-      toast.error('复制失败，请手动选择链接');
-    }
-  }
-
   async function preview() {
     const playlist = result?.playlist;
     if (!playlist) return;
@@ -199,7 +197,7 @@ export function HomeView() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-6">
+    <div className="mx-auto flex w-full min-w-0 max-w-[1180px] flex-col gap-6">
       {/* 生成器是页面唯一的核心动作，因此放在品牌色最重的横幅里 */}
       <section className="hero-surface relative overflow-hidden rounded-2xl p-6 md:p-8">
         <div
@@ -230,13 +228,16 @@ export function HomeView() {
               void generate(input, platform);
             }}
           >
-            <div className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 rounded-xl bg-[var(--hero-field)] px-4 text-[var(--hero-field-foreground)] shadow-lg sm:flex-1">
+            <div className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 rounded-xl bg-[var(--hero-field)] px-4 text-[var(--hero-field-foreground)] shadow-lg focus-within:ring-2 focus-within:ring-white/70 focus-within:ring-offset-2 focus-within:ring-offset-[var(--hero-mid)] sm:flex-1">
               <Link2 className="size-4 shrink-0" />
               <input
+                ref={inputRef}
                 value={input}
-                onChange={event => setInput(event.target.value)}
+                onChange={event => { setInput(event.target.value); setInputError(''); }}
                 placeholder={`粘贴${info.short}歌单链接或 ID`}
                 aria-label="歌单链接或 ID"
+                aria-invalid={!!inputError}
+                aria-describedby={inputError ? 'playlist-input-error' : undefined}
                 autoComplete="off"
                 spellCheck={false}
                 className="h-full min-w-0 flex-1 bg-transparent text-base sm:text-sm text-[#123043] outline-none placeholder:text-[var(--hero-field-foreground)]"
@@ -250,8 +251,7 @@ export function HomeView() {
               {busy ? '生成中…' : canGenerate ? '生成链接' : '登录账号'}
             </button>
           </form>
-
-
+          {inputError && <p id="playlist-input-error" role="alert" className="mt-3 text-sm text-white">{inputError}</p>}
         </div>
       </section>
 
@@ -264,31 +264,16 @@ export function HomeView() {
           />
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15.5px] font-semibold">{result.playlist.name}</p>
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-              {platformLabel(platform)} · {result.playlist.songCount ?? result.playlist.trackCount ?? 0} 首 ·
-               链接有效期 24 小时
-            </p>
-            <div className="mt-2.5 flex items-center gap-2.5 rounded-lg border border-border bg-muted/50 px-3 py-2">
-              <code className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">{result.url}</code>
-              <button
-                type="button"
-                onClick={copyLink}
-                aria-label="复制链接"
-                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-              >
-                <Copy className="size-4" />
-              </button>
+            <div className="mt-2">
+              <PlaylistLinkActions result={result} platform={platform} onPlay={() => void preview()} onRetry={() => void generate(result.playlist!.id, platform)}>
+                {info.library && (
+                  <Button variant="outline" disabled={updatingFavorite} onClick={() => void toggleFavorite()}>
+                    <Heart className={favorited ? 'fill-current' : undefined} />
+                    {favorited ? '已收藏' : '收藏'}
+                  </Button>
+                )}
+              </PlaylistLinkActions>
             </div>
-          </div>
-          <div className="flex shrink-0 flex-wrap gap-2">
-            <Button onClick={copyLink}><Copy />复制</Button>
-            <Button variant="outline" onClick={() => void preview()}><MonitorPlay />预览</Button>
-            {info.library && (
-              <Button variant="outline" disabled={updatingFavorite} onClick={() => void toggleFavorite()}>
-                <Heart className={favorited ? 'fill-current' : undefined} />
-                {favorited ? '已收藏' : '收藏'}
-              </Button>
-            )}
           </div>
         </section>
       )}

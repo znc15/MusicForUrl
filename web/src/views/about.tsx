@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/input';
 import { PageHeader } from '@/components/page-header';
 import { useCapabilities } from '@/hooks/use-capabilities';
+import type { SiteStats } from '@/lib/types';
 
 interface Health {
   status: string;
@@ -40,11 +41,12 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 /** 统计数字块。数值在加载时用占位骨架，避免先闪一个 0 再跳到真实值。 */
 function Stat({
-  label, value, loading, wide = false,
+  label, value, loading, detail, wide = false,
 }: {
   label: string;
   value: string;
   loading: boolean;
+  detail?: string;
   wide?: boolean;
 }) {
   return (
@@ -55,6 +57,7 @@ function Stat({
       ) : (
         <p className="mt-1.5 text-[27px] font-semibold leading-none tracking-tight tabular-nums">{value}</p>
       )}
+      {detail && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{detail}</p>}
     </div>
   );
 }
@@ -87,6 +90,7 @@ export function AboutView() {
     queryFn: () => api.stats(),
     staleTime: 5 * 60_000,
   });
+  const ranking = useQuery({ queryKey: ['stats', 'top'], queryFn: () => api.statsTop(), staleTime: 5 * 60_000 });
 
   const health = healthQuery.data;
   const capabilityUnknown = capabilityQuery.isPending ? '加载中…' : '未知';
@@ -94,6 +98,10 @@ export function AboutView() {
   const data = stats.data;
   const loading = stats.isLoading;
   const updatedAt = data?.updatedAt ? formatDateTime(new Date(data.updatedAt).toISOString()) : '';
+  const startedAt = data?.startedAt ? `自 ${formatDateTime(new Date(data.startedAt).toISOString())} 起` : '';
+  const value = (key: keyof SiteStats) => data?.unknown?.includes(key) ? null : data?.[key];
+  const number = (key: keyof SiteStats) => typeof value(key) === 'number' ? value(key) as number : null;
+  const count = (key: keyof SiteStats, unit: string) => number(key) == null ? '—' : `${formatCount(number(key)!)} ${unit}`;
 
   return (
     <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-5">
@@ -108,23 +116,41 @@ export function AboutView() {
         <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-[15px] font-semibold">站点统计</h2>
           <p className="text-[11.5px] text-muted-foreground">
-            全站汇总口径{updatedAt ? ` · 更新于 ${updatedAt}` : ''}
+            {updatedAt ? `更新于 ${updatedAt}` : ''}
           </p>
         </div>
 
-        {stats.isError && (
+        {(stats.isError || data?.stale) && (
           <div role="alert" className="mb-4 flex items-center gap-3 text-sm text-destructive">
-            <span>{data ? '统计刷新失败' : '统计暂时不可用'}</span>
+            <span>{data ? '统计刷新失败，正在显示上次结果' : '统计暂时不可用'}</span>
             <Button size="sm" variant="outline" disabled={stats.isFetching} onClick={() => void stats.refetch()}>重试</Button>
           </div>
         )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 lg:grid-cols-5">
-          <Stat label="累计解析歌曲" value={data?.parsedSongs == null ? '—' : `${formatCount(data.parsedSongs)} 首`} loading={loading} />
-          <Stat label="总播放时长" value={data?.playDurationMs == null ? '—' : formatTotalDuration(data.playDurationMs)} loading={loading} />
-          <Stat label="使用人数" value={data?.listeners == null ? '—' : `${formatCount(data.listeners)} 人`} loading={loading} />
-          <Stat label="累计播放" value={data?.plays == null ? '—' : `${formatCount(data.plays)} 次`} loading={loading} />
-          <Stat label="生成链接" value={data?.generatedLinks == null ? '—' : `${formatCount(data.generatedLinks)} 个`} loading={loading} wide />
+          <Stat label="累计解析歌曲" value={count('parsedSongs', '首')} loading={loading} />
+          <Stat label="估算播放时长" value={number('playDurationMs') == null ? '—' : formatTotalDuration(number('playDurationMs')!)} loading={loading}
+            detail={[startedAt, data?.unknownDurationPlays ? `${formatCount(data.unknownDurationPlays)} 次缺少时长` : ''].filter(Boolean).join(' · ')} />
+          <Stat label="已登录账号" value={count('listeners', '个')} loading={loading} />
+          <Stat label="累计有效播放请求" value={count('plays', '次')} loading={loading} detail={startedAt} />
+          <Stat label="生成链接" value={count('generatedLinks', '个')} loading={loading} wide />
         </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5">
+        <h2 className="mb-4 text-[15px] font-semibold">近 30 天热门歌曲</h2>
+        {(ranking.isError || ranking.data?.stale) && <div role="alert" className="mb-3 flex items-center gap-3 text-sm text-destructive">
+          <span>{ranking.data ? '排行刷新失败，正在显示上次结果' : '排行暂时不可用'}</span>
+          <Button variant="outline" size="sm" disabled={ranking.isFetching} onClick={() => void ranking.refetch()}>重试</Button>
+        </div>}
+        {ranking.isPending ? <Skeleton className="h-20 w-full" /> : ranking.data?.data.length ? (
+          <ol className="grid gap-x-8 sm:grid-cols-2">
+            {ranking.data.data.slice(0, 10).map((song, index) => <li key={`${song.platform}:${song.songId}`} className="flex min-w-0 items-center gap-3 border-b border-border py-3 last:border-0">
+              <span className="w-5 shrink-0 text-xs tabular-nums text-muted-foreground">{index + 1}</span>
+              <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{song.songName}</p><p className="truncate text-xs text-muted-foreground">{song.artist}</p></div>
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatCount(song.playCount)} 次</span>
+            </li>)}
+          </ol>
+        ) : ranking.data && <p className="text-sm text-muted-foreground">近 30 天暂无播放记录</p>}
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">

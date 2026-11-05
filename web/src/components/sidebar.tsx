@@ -19,6 +19,8 @@ const ICONS: Record<ViewName, typeof Link2> = {
   about: Info,
 };
 
+const MOBILE_LABELS: Record<ViewName, string> = { home: '生成', user: '音乐', preview: '预览', accounts: '账号', about: '关于' };
+
 const EXPANDED_WIDTH = 252;
 const COLLAPSED_WIDTH = 76;
 
@@ -123,7 +125,7 @@ export function Sidebar() {
 
   const itemClass = (active: boolean) => cn(
     'flex items-center rounded-lg transition-colors',
-    showExpanded ? 'h-9 gap-2.5 px-2.5 text-[13.5px]' : 'size-11 justify-center',
+    !wide ? 'min-h-12 flex-col justify-center gap-1 text-[11px]' : showExpanded ? 'h-9 gap-2.5 px-2.5 text-[13.5px]' : 'size-11 justify-center',
     active
       ? 'bg-rail-active text-rail-active-foreground'
       : 'text-rail-foreground hover:bg-white/8 hover:text-rail-active-foreground',
@@ -135,14 +137,14 @@ export function Sidebar() {
       aria-expanded={wide ? expanded : undefined}
       style={{ '--rail-width': `${showExpanded ? EXPANDED_WIDTH : COLLAPSED_WIDTH}px` } as React.CSSProperties}
       className={cn(
-        'flex shrink-0 items-center gap-1 bg-rail px-3 py-2',
+        'flex shrink-0 items-center gap-1 bg-rail px-2 py-1.5',
         'md:h-full md:flex-col md:gap-1 md:px-3 md:py-4',
         showExpanded ? 'md:items-stretch' : 'md:items-center',
         'md:w-[var(--rail-width)] md:transition-[width] md:duration-[250ms] md:ease-[cubic-bezier(0.4,0,0.2,1)]',
       )}
     >
       {/* 品牌独占顶部；收起与展开的切换放在底部，和账号入口待在一起 */}
-      <div className={cn('flex items-center', showExpanded ? 'gap-2.5 md:mb-3' : 'md:mb-2 md:justify-center')}>
+      <div className={cn('hidden items-center md:flex', showExpanded ? 'gap-2.5 md:mb-3' : 'md:mb-2 md:justify-center')}>
         <NavLink to="/" aria-label="MusicForUrl 首页" className="flex items-center gap-2.5 md:min-w-0">
           <img src="/brand.svg" alt="" className="size-7 shrink-0" />
           {showExpanded && (
@@ -151,12 +153,12 @@ export function Sidebar() {
         </NavLink>
       </div>
 
-      <ul id="main-navigation" className="contents md:flex md:flex-col md:gap-1">
+      <ul id="main-navigation" className="grid w-full grid-cols-5 gap-1 md:flex md:flex-col md:gap-1">
         {NAV_ORDER.map(view => {
           const Icon = ICONS[view];
           const active = location.pathname.replace(/\.html$/, '') === viewPath(view);
           return (
-            <li key={view} className="contents">
+            <li key={view} className="min-w-0">
               <NavLink
                 to={viewPath(view)}
                 end={view === 'home'}
@@ -166,7 +168,7 @@ export function Sidebar() {
                 className={itemClass(active)}
               >
                 <Icon className="size-[18px] shrink-0" />
-                {showExpanded && <span className="truncate">{VIEW_TITLES[view]}</span>}
+                {!wide ? <span className="whitespace-nowrap">{MOBILE_LABELS[view]}</span> : showExpanded && <span className="truncate">{VIEW_TITLES[view]}</span>}
               </NavLink>
             </li>
           );

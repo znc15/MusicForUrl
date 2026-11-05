@@ -1,11 +1,11 @@
 import qqmusic from '../../lib/qqmusic.js';
 import * as netease from './netease.js';
 import { packedAudioResponse } from './packed-audio.js';
-import { PLAY_LOG_RETENTION_MS, prunePlaybackLogs, recordPlayback } from './playback-history.js';
+import { PLAY_LOG_RETENTION_MS, prunePlaybackLogs, readGlobalPlaybackRanking, readPlaybackRanking, recordPlayback } from './playback-history.js';
 import { handlePlayer, resolvePlayerSource, proxyPlayerSource } from './player.js';
 import {
   createPlaybackToken, createSession, decryptCookie, getPlaybackUser, getSessionUser,
-  logout, requireSecret, sha256Hex,
+  logout, playbackTokenExpiresAt, requireSecret, sha256Hex,
 } from './security.js';
 import {
   adapter, buildLitePlaylist, getPlaylist, parsePlaylistId, songUrl, streamPrefix,
@@ -13,7 +13,7 @@ import {
 } from './playlists.js';
 import { PLATFORMS, capabilityMatrix, guestUser, platformFromPath } from './platforms.js';
 import { bumpParsedSongs, readSiteStats, refreshSiteStats } from './stats.js';
-import { recordPlayEvent, recordRequestEvent } from './telemetry.js';
+import { recordMediaFailure, recordPlayEvent, recordRequestEvent } from './telemetry.js';
 import { degradeMode } from './degrade.js';
 import { admitControl, rateLimited, retryAfter } from './request-policy.js';
 
@@ -327,22 +327,23 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
   if (request.method === 'GET' && path === '/parse') {
     const playlistId = parsePlaylistId(url.searchParams.get('url'), platform);
     if (!playlistId) return fail('无效的歌单链接或 ID');
-    const playlist = await getPlaylist(env, user, playlistId, ctx);
+    const playlist = await getPlaylist(env, user, playlistId, ctx, { refreshPartial: true });
     // 旧版前端先 /parse 再 /url：解析数只在这里累加，链接数留给 /url
     ctx.waitUntil(bumpParsedSongs(env, playlist.tracks.length, 0));
     return json({ success: true, data: {
       id: playlist.id, name: playlist.name, cover: playlist.cover, songCount: playlist.songCount,
+      totalCount: playlist.totalCount, includedCount: playlist.includedCount, partialReason: playlist.partialReason,
     } });
   }
 
   if (request.method === 'GET' && path === '/url') {
     const playlistId = String(url.searchParams.get('id') || '');
     if (!validPlaylistId(playlistId, platform)) return fail('无效的歌单 ID');
-    await getPlaylist(env, user, playlistId, ctx);
+    await getPlaylist(env, user, playlistId, ctx, { refreshPartial: true });
     const token = await createPlaybackToken(env, user, playlistId);
     // 旧版前端的签发入口：解析已在 /parse 计过，这里只加链接数
     ctx.waitUntil(bumpParsedSongs(env, 0, 1));
-    return json({ success: true, data: playlistUrlPayload(url.origin, platform, token, playlistId) });
+    return json({ success: true, data: { ...playlistUrlPayload(url.origin, platform, token, playlistId), expiresAt: playbackTokenExpiresAt(token) } });
   }
 
   // 一次请求完成解析 → 取歌单 → 签发令牌 → 返回链接，替代前端连续调用 /parse 与 /url
@@ -350,15 +351,16 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
     const body = await bodyJson(request);
     const playlistId = parsePlaylistId(body.url, platform);
     if (!playlistId) return fail('无效的歌单链接或 ID');
-    const playlist = await getPlaylist(env, user, playlistId, ctx);
+    const playlist = await getPlaylist(env, user, playlistId, ctx, { refreshPartial: true });
     const token = await createPlaybackToken(env, user, playlistId);
     // 新前端的入口：一次请求同时累加解析歌曲数与生成的链接数
     ctx.waitUntil(bumpParsedSongs(env, playlist.tracks.length, 1));
     return json({ success: true, data: {
       playlist: {
         id: playlist.id, name: playlist.name, cover: playlist.cover, songCount: playlist.songCount,
+        totalCount: playlist.totalCount, includedCount: playlist.includedCount, partialReason: playlist.partialReason,
       },
-      ...playlistUrlPayload(url.origin, platform, token, playlistId),
+      ...playlistUrlPayload(url.origin, platform, token, playlistId), expiresAt: playbackTokenExpiresAt(token),
     } });
   }
 
@@ -393,13 +395,13 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
     const resource = await resolvePlayerSource(env, user, songId, url.searchParams.get('quality') || env.MUSIC_QUALITY || 'low', false, ctx);
     const destination = resource.url;
     if (!destination) return fail('歌曲不可播放，可能无版权或需要对应会员权限', 404);
-    // 游客平台没有 users 行，play_stats 的外键无法成立；分析数据仍然进 AE
+    const surface = url.searchParams.get('hls') === '1' ? 'hls' : 'redirect';
     const record = (cacheState = '') => ctx.waitUntil(
-      (user.guest ? Promise.resolve() : recordPlayback(env, user.id, playlistId, song))
-        .then(() => recordPlayEvent(env, {
+      recordPlayback(env, user, playlistId, song, Date.now(), { request, surface })
+        .then(admitted => admitted && recordPlayEvent(env, {
           platform, userId: user.id, playlistId, song, quality: resource.quality,
           format: resource.format, bitrate: resource.bitrate, trial: resource.trial,
-          surface: 'hls', cacheState, colo: request.cf?.colo,
+          surface, cacheState, colo: request.cf?.colo,
         }))
         .catch(error => console.error('[Playback history]', error)));
     if (url.searchParams.get('hls') === '1') {
@@ -408,7 +410,8 @@ async function playbackRoute(request, env, ctx, platform, path, url) {
         env, ctx, user, songId, resource, false, request.method !== 'HEAD')
         .then((response) => { cacheState = response.headers.get('x-mfu-cache') || ''; return response; });
       return packedAudioResponse(request, destination, platform, fetchAudio,
-        request.method === 'GET' ? () => record(cacheState) : undefined);
+        request.method === 'GET' ? () => record(cacheState) : undefined,
+        failure => recordMediaFailure(env, request, url, failure, { platform }));
     }
     const response = new Response(null, { status: 302, headers: {
       location: destination,
@@ -515,14 +518,7 @@ async function historyRoute(request, env, platform, path, url) {
 
   if (path === '/top') {
     const limit = numberParam(url.searchParams.get('limit'), 10, 50) || 10;
-    const rows = await env.DB.prepare(`
-      SELECT song_id, MAX(song_name) AS song_name, MAX(artist) AS artist,
-        SUM(play_count) AS play_count FROM play_stats WHERE user_id = ? AND last_played_at_ms >= ?
-      GROUP BY song_id ORDER BY play_count DESC LIMIT ?
-    `).bind(user.id, cutoff, limit).all();
-    return json({ success: true, data: rows.results.map((row) => ({
-      songId: row.song_id, songName: row.song_name, artist: row.artist, playCount: row.play_count,
-    })) });
+    return json({ success: true, ...await readPlaybackRanking(env, { userId: user.id, platform, limit }) });
   }
   return fail('接口不存在', 404);
 }
@@ -545,6 +541,9 @@ async function api(request, env, ctx) {
   if (pathname.startsWith('/api/player/')) return handlePlayer(request, env, ctx);
   // 站点统计对所有访客开放，不含任何账号维度
   if (pathname === '/api/stats') return json({ success: true, data: await readSiteStats(env) });
+  if (pathname === '/api/stats/top') {
+    return json({ success: true, ...await readGlobalPlaybackRanking(env, ctx, numberParam(url.searchParams.get('limit'), 10, 50)) });
+  }
 
   const routed = platformFromPath(pathname);
   if (!routed) return fail('接口不存在', 404);

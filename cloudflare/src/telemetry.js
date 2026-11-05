@@ -9,6 +9,7 @@ const PLATFORM_PREFIX = '(?:qq|kugou|kuwo)?\\/?';
 const ROUTE_PATTERNS = [
   [/^\/api\/health$/, 'health'],
   [/^\/api\/stats$/, 'stats'],
+  [/^\/api\/stats\/top$/, 'stats.top'],
   [/^\/api\/player\/capabilities$/, 'player.capabilities'],
   [/^\/api\/player\/playlist$/, 'player.playlist'],
   [/^\/api\/player\/resolve\//, 'player.resolve'],
@@ -31,8 +32,10 @@ function platformOfPath(pathname) {
   return match ? match[1] : 'netease';
 }
 
-// 媒体与分片请求已经由播放事件覆盖，再记一次会让遥测先于请求数撞上每日 10 万点上限
+// 成功媒体请求由播放事件覆盖；失败继续采样，保留排障阶段。
 const PLAYBACK_ROUTE_KEYS = new Set(['song.segment', 'player.media']);
+const FAILURE_CLASSES = new Set(['authorization', 'upstream', 'format', 'rate_limit', 'stream_read', 'cancelled', 'unavailable', 'request', 'internal']);
+const PLATFORM_IDS = new Set(['netease', 'qq', 'kugou', 'kuwo']);
 
 function truncate(value, max) {
   return String(value ?? '').slice(0, max);
@@ -43,8 +46,8 @@ function emit(dataset, point) {
   try {
     dataset.writeDataPoint(point);
     return true;
-  } catch (error) {
-    console.warn('[Telemetry]', error.message);
+  } catch (_) {
+    console.warn('[Telemetry] write failed');
     return false;
   }
 }
@@ -84,23 +87,49 @@ function recordPlayEvent(env, details) {
   return emit(env.ANALYTICS, playEventPoint(env, details));
 }
 
-function recordRequestEvent(env, request, url, status, durationMs) {
+function failureClass(status) {
+  if (status === 401 || status === 403) return 'authorization';
+  if (status === 429) return 'rate_limit';
+  if (status === 415) return 'format';
+  if (status === 499) return 'cancelled';
+  if (status === 502 || status === 503 || status === 504) return 'upstream';
+  if (status === 404) return 'unavailable';
+  if (status >= 500) return 'internal';
+  return status >= 400 ? 'request' : '';
+}
+
+function requestPoint(env, request, url, status, durationMs, failure, type, platform) {
   if (!env.ANALYTICS_REQUESTS) return false;
   const key = routeKey(url.pathname);
-  if (PLAYBACK_ROUTE_KEYS.has(key)) return false;
   const sample = telemetrySample(env);
   if (sample > 1 && Math.random() > 1 / sample) return false;
+  const method = /^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$/.test(request.method) ? request.method : 'OTHER';
+  const requestedPlatform = url.searchParams.get('platform') || 'netease';
+  const platformId = PLATFORM_IDS.has(platform) ? platform
+    : key.startsWith('player.') ? (key !== 'player.capabilities' && PLATFORM_IDS.has(requestedPlatform) ? requestedPlatform : 'unknown')
+      : platformOfPath(url.pathname);
   return emit(env.ANALYTICS_REQUESTS, {
     indexes: [key],
     blobs: [
-      'req', key, truncate(request.method, 8), truncate(platformOfPath(url.pathname), 8),
-      truncate(request.cf?.colo, 8), truncate(env.DEGRADE_MODE, 16),
+      type, key, method, platformId,
+      truncate(request.cf?.colo, 8), truncate(env.DEGRADE_MODE, 16), failure,
     ],
     doubles: [Number(status) || 0, Number(durationMs) || 0, sample, Date.now()],
   });
 }
 
+function recordRequestEvent(env, request, url, status, durationMs) {
+  const failure = failureClass(Number(status));
+  if (PLAYBACK_ROUTE_KEYS.has(routeKey(url.pathname)) && !failure) return false;
+  return requestPoint(env, request, url, status, durationMs, failure, 'req');
+}
+
+function recordMediaFailure(env, request, url, failure, { platform, status = 200, durationMs = 0 } = {}) {
+  if (!FAILURE_CLASSES.has(failure)) return false;
+  return requestPoint(env, request, url, status, durationMs, failure, 'media_failure', platform);
+}
+
 export {
   PLAY_EVENT_SAMPLE, REQUEST_TELEMETRY_SAMPLE_DEFAULT,
-  platformOfPath, recordPlayEvent, recordRequestEvent, routeKey, telemetrySample,
+  failureClass, platformOfPath, recordMediaFailure, recordPlayEvent, recordRequestEvent, routeKey, telemetrySample,
 };

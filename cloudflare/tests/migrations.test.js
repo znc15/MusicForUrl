@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { schema, VERSION, inspectDatabase, migrationPlan, migrateDatabase, wranglerDatabase } from '../scripts/migrate.mjs';
+import { schema, VERSION, PREVIOUS_VERSION, inspectDatabase, migrationPlan, migrateDatabase, wranglerDatabase } from '../scripts/migrate.mjs';
 
 function fixture(t, source = '') {
   const sqlite = new DatabaseSync(':memory:');
@@ -21,7 +21,7 @@ function fixture(t, source = '') {
   };
 }
 
-const legacySchema = schema.replace("'netease', 'qq', 'kugou', 'kuwo'", "'netease', 'qq'")
+const legacySchema = schema.split('-- v2 totals')[0].replace("'netease', 'qq', 'kugou', 'kuwo'", "'netease', 'qq'")
   .replace(/CREATE TABLE IF NOT EXISTS schema_migrations \([\s\S]*?\);/, '')
   .replace(/(CREATE TABLE IF NOT EXISTS qr_sessions \([\s\S]*?platform TEXT NOT NULL)/, "$1 CHECK (platform IN ('netease', 'qq'))")
   .replace(/  duration_ms INTEGER NOT NULL DEFAULT 0,\r?\n/, '');
@@ -51,6 +51,29 @@ test('fresh database migrates once and accepts all four account platforms', asyn
   }
   assert.deepEqual(await migrateDatabase(db), { changed: false, version: VERSION });
   assert.equal(rows(db, 'users').length, 4);
+});
+
+test('0004 upgrade adds a new exact ledger without replaying history and can recover from failed import', async t => {
+  const db = fixture(t, schema.split('-- v2 totals')[0]);
+  seed(db);
+  db.sqlite.prepare('INSERT INTO schema_migrations VALUES (?, 100)').run(PREVIOUS_VERSION);
+  db.sqlite.exec("INSERT INTO play_stats VALUES (7, 'p1', 's1', 'Preserved', '', 180000, 200, 950);");
+  db.sqlite.exec("INSERT INTO site_stats VALUES ('plays', 450, 950);");
+  const preserved = Object.fromEntries(['users', 'playlists', 'favorites', 'play_logs', 'play_stats', 'site_stats'].map(name => [name, rows(db, name)]));
+  const plan = migrationPlan(await inspectDatabase(db.query));
+  assert.throws(() => db.execute(plan + '\nINSERT INTO missing_table VALUES (1);'));
+  assert.equal(rows(db, 'schema_migrations').length, 1);
+  assert.equal(db.query("SELECT name FROM sqlite_schema WHERE name='playback_totals'").length, 0);
+  await migrateDatabase(db);
+  for (const [name, expected] of Object.entries(preserved)) assert.deepEqual(rows(db, name), expected, name);
+  assert.deepEqual(rows(db, 'schema_migrations').map(row => row.version), [PREVIOUS_VERSION, VERSION]);
+  const totals = rows(db, 'playback_totals')[0];
+  assert.equal(totals.plays, 0);
+  assert.ok(totals.started_at_ms > 0);
+  db.sqlite.exec("UPDATE playback_totals SET plays=5, duration_ms=123000;");
+  const after = rows(db, 'playback_totals');
+  assert.equal((await migrateDatabase(db)).changed, false);
+  assert.deepEqual(rows(db, 'playback_totals'), after);
 });
 
 test('legacy users rebuild preserves primary keys, child data, sequences, indexes and QR sessions', async t => {
@@ -108,7 +131,7 @@ test('current schema without a migration ledger is adopted without replaying his
   db.sqlite.exec("INSERT INTO play_stats VALUES (7, 'p1', 's1', 'Current', 'Artist', 123000, 20, 1000);");
   await migrateDatabase(db);
   assert.equal(rows(db, 'play_stats').find(row => row.song_id === 's1').play_count, 20);
-  assert.equal(rows(db, 'schema_migrations').length, 1);
+  assert.equal(rows(db, 'schema_migrations').length, 2);
 });
 
 test('failure inside the migration batch rolls back parent and child data together', async t => {

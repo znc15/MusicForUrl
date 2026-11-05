@@ -1,7 +1,7 @@
 {
   "name": "music-for-url-web",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,6 @@
     "@tanstack/react-query": "^5.66.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "harmonyos-sans-sc-webfont-splitted": "1.1.0",
     "hls.js": "1.7.3",
     "lucide-react": "^0.475.0",
     "motion": "^12.4.0",

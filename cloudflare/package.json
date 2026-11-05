@@ -1,6 +1,6 @@
 {
   "name": "music-for-url-cloudflare",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,7 +17,7 @@
     "db:migrate:stats": "node scripts/migrate.mjs --remote",
     "db:migrate:qr": "node scripts/migrate.mjs --remote",
     "test:migrations:local": "node --test tests/migrations-local.test.js",
-    "test": "node --test tests/worker.test.js tests/platforms.test.js tests/platform-parity.test.js tests/netease.test.js tests/packed-audio.test.js tests/workspace.test.js tests/qqmusic.test.js tests/migrations.test.js"
+    "test": "node --test tests/worker.test.js tests/platforms.test.js tests/platform-parity.test.js tests/netease.test.js tests/packed-audio.test.js tests/workspace.test.js tests/qqmusic.test.js tests/migrations.test.js tests/playlist-completeness.test.js tests/stats-v2.test.js tests/media-telemetry.test.js"
   },
   "dependencies": {
     "crypto-js": "4.2.0",

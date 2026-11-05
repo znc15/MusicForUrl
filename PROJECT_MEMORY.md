@@ -2,6 +2,19 @@
 
 ## 当前方向（2026-11-05）
 
+**当前阶段：2.3.0 已实现并通过本地验收，生产数据库增量迁移完成，准备推送与部署。** 用户确认统计采用持久累计有效播放请求（含游客）、估算播放时长、已登录账号及独立 30 天排行；Apple Music 测试环境/账号暂未准备，本轮保留 B 方案评估结果。B01—B06、U01—U07、P01、E01 已实施；验收与发布状态见下节。
+
+## 2.3.0 实施与验收（2026-11-05）
+
+- 歌单详情可复制地址，卡片保留独立播放；部分歌单显示实际纳入数、原因与真实有效期并支持重取。修复登录迟到响应、终曲重建音量和旧播放错误竞争。
+- 登录与共享 Dialog 完整进出动效；平台/分类单行切换条、手机导航、字段错误反馈和系统字体完成。公告 `release-2.3.0` 首次展示、本机已读、手动重开、登录优先。
+- 新增永久 `playback_totals`、30 天 `playback_events`、游客覆盖和公开排行；未知/零值/旧快照/错误区分。媒体传输完整性及失败 AE 分类已补齐，原生日志配置继续沿用。
+- 本地测试 183/183（根 26、Worker 115、前端 42）；独立本地 D1 集成 1/1。类型检查、React 生产构建、Worker dry-run、Pages Functions 打包和文档构建通过。hls.js 仍有既有按需块体积提示。
+- 隔离浏览器合成数据验收：详情无自动播放、复制/重取、收藏/最近入口、A/B 登录竞争、键盘焦点、减弱动效、空输入和损坏链接；统计未知为 —、真实零、旧数据重试；终曲重建静音保持 0、非静音保持 0.2；公告与登录切换期间同一音频元素且 pause 事件为 0。320px 深色与 375/768/1440px 浅色截图已实际查看；字体请求为 0。
+- 生产 D1 已备份并应用 `0005-persistent-playback-stats`。原表迁移前后数量相同：users 48、playlists 3、favorites 2、play_stats 405、play_logs 284；外键违规 0，ledger 包含 0004 与 0005。新累计起算 `1793883320000`（2026-11-05T12:55:20Z），初始 plays=0。
+- 备份与发布证据：`.codex/releases/2026-11-05-2.3.0/`；迁移前书签 `00000357-00000000-0000511a-26ed0af386d2b89c86b6b5ad48aec137`。前一 Worker 为 `41815286-f171-48db-9c97-50b6b0f6d4d1`，可回退代码并保留增量表。测试/UI 证据 `.codex/audits/2026-11-05-update/`。
+- 待完成：推送候选、Cloudflare 自动部署、线上版本/API/界面、GitHub Actions 与 v2.3.0 Release。真实四平台账号与 VRChat/AVPro 实播仍需账号和客户端参与；Apple Music 等用户准备隔离环境与有效订阅账号后继续评估。
+
 用户决定采用两个分支，后续仅维护 Cloudflare 方案，传统 Node.js 方案保持冻结。
 
 | 分支 | 用途 | 基线 |
@@ -10,6 +23,8 @@
 | `node` | 传统 Node.js / SQLite / Docker 原版本 | 固定 `f3830c4`，2.1.1 |
 
 当前工作目录为 `K:\MusicForUrl`。2026-11-05 按用户最新决定，Cloudflare 分支改名为 `master`，传统冻结分支改名为 `node`，分支名去除前缀。`master` 跟踪 `origin/master`。用户随后授权推送两个分支并更新既有 Cloudflare 生产服务。
+
+用户于 2026-11-05 补充发布要求：以后每次更新都递增版本号，并同步更新 GitHub Release。具体版本同步与发布验收步骤写入 `AGENTS.md`；更新记录统一维护在 `CHANGELOG.md`。
 
 ## 结构与入口
 
@@ -58,9 +73,45 @@
 - 构建变量：`NODE_VERSION=24`、`SKIP_DEPENDENCY_INSTALL=1`。继续沿用原构建令牌、D1、R2、Analytics、Cron、域名与运行 Secret。
 - 发布脚本补丁 `df2e936` 修复 Wrangler 远端文件导入输出混入进度文本导致的解析误报；严格查询 JSON、非零退出处理、迁移后 FK 与版本 ledger 检查保留。迁移单测 10/10、Worker 总测试 83/83、真实本地 D1 集成 1/1 通过，生产 no-op 检查通过。
 - `df2e936` 与自动部署文档已推送，候选 `07b201b` 的 GitHub Actions 检查及文档发布通过。
-- Cloudflare 专属构建失败已定位为 `EMFILE`：构建容器软/硬文件句柄上限均为 1024，提升额度被拒绝。包安装与解析诊断确认 clsx 完整；Vite 默认模块读取并发与 246 个字体 URL 读取叠加导致资源紧张。已在 `web/vite.config.ts` 将 Rollup `maxParallelFileOps` 设为 128，为字体加载留出空间；本地构建通过，下一步由真实 Cloudflare Builds 验证。临时诊断及 ulimit 命令已移除。
+- Cloudflare 专属构建失败已定位为 `EMFILE`：构建容器软/硬文件句柄上限均为 1024，提升额度被拒绝。包安装与解析诊断确认 clsx 完整；Vite 默认模块读取并发与 246 个字体 URL 读取叠加导致资源紧张。已在 `web/vite.config.ts` 将 Rollup `maxParallelFileOps` 设为 128，为字体加载留出空间；本地与真实 Cloudflare Builds 构建均已通过。临时诊断及 ulimit 命令已移除。
 - 构建并发修复提交 `162edb95846004c964fe307958d0c91df16c6d21` 已推送并通过实际 Cloudflare Workers Builds：`689f24a4-8023-4f3b-af0f-0c6293394910`，完整测试、React 构建、Worker dry-run 与部署成功；构建/发布日志保存在 `.codex/releases/2026-11-05-master-51c81ed/automatic-build-162edb9.log`。
-- 当前生产 Worker：`ea1d63cd-49eb-4067-9f85-de7abb103d19`，`DEPLOY_VERSION=162edb95846004c964fe307958d0c91df16c6d21`。三域名 health=200/ok、capabilities=200、三平台 Cookie=405；生产 assets、375px 页面和全部绑定（含 ENCRYPTION_KEY）验收通过。原 47 个账号与数据库迁移验收继续有效。
+- 该次自动发布 Worker：`ea1d63cd-49eb-4067-9f85-de7abb103d19`，`DEPLOY_VERSION=162edb95846004c964fe307958d0c91df16c6d21`。三域名 health=200/ok、capabilities=200、三平台 Cookie=405；生产 assets、375px 页面和全部绑定（含 ENCRYPTION_KEY）验收通过。原 47 个账号与数据库迁移验收继续有效。
 - Cloudflare 构建监视排除 `PROJECT_MEMORY.md`，只更新发布记录时不重新部署应用；其他路径继续触发构建。临时诊断及 ulimit 命令均已移除，生产分支仍为 master。
 - Cloudflare 实际部署与线上核验已成功；其 GitHub check-run 回写暂显示 in_progress，保留原始状态，不用手工改写。GitHub Actions `Project checks` run `42008009568` 已成功，覆盖 136 项测试、本地 D1 集成、React/Worker/Pages 与文档构建。独立文档站沿用已成功的 `42005728225`。
 - 真实平台账号扫码/密码登录和 VRChat/AVPro 仍需实际账号与客户端验证。后续维护仅改 master，node 保持 f3830c4。
+
+## 第二轮问题与 UI 需求（2026-11-05，分析阶段）
+
+- 已建立 `OPTIMIZATION_BACKLOG.md`，包含剩余问题、用户新增五项需求、文件位置、优先级与验收方式。后续仍只在 master 实施。
+- 用户明确新增：登录悬浮窗开关/切换动画；截图中的切换条样式；歌单卡片进入详情后可复制播放地址并保留独立播放入口；新增 Apple Music（由更多平台需求收敛）；公告悬浮窗。
+- 公告需求已记录为 U07，建议采用顶栏入口、未读公告首次自动展示、按公告 ID 本机已读、手动重开，并复用登录弹窗的动效/可访问性；正文发布时提供，首版沿用 master 数据维护与发布流程。
+- 已复现关键问题：部分歌单导出数量失真/长缓存；旧登录响应覆盖新账号；终曲结束后静音界面仍为开但 audio.volume=1；旧手动播放 Promise 错误污染新曲目；后端统计缺失伪装为零、累计/人数/时长口径不一致。
+- UI/性能补充：320px 标签拆字与分段控件 3+1 换行；首页输入键盘焦点不可见/空提交无反馈；损坏 grant 触发 URIError；首页首次字体 18 请求、1116160 字节传输。截图在 `.codex/audits/2026-11-05-ui/`。
+- 用户于 2026-11-05 将首批平台扩展收敛为 Apple Music，随后选择 B：继续评估 Apple 原音全曲直链用于 VRChat/AVPro；外播目标已确定，继续核对独立服务与实际播放链路。
+- 该轮分析已归档。用户已确认本轮开发与统计口径，实施结果见 2.3.0；Apple Music 路线 B 暂留评估，等待测试环境与账号。
+
+## Workers Observability（2026-11-05，已发布）
+
+- 用户随后明确要求启用 Workers Observability。本次只实施原生日志及直接相关的凭据日志修复，上述 UI、平台扩展与公告需求仍待实施。
+- `master` 已推送 `847176533c6c620c98b6cf89107db0fb38fdf70d`；`cloudflare/wrangler.jsonc` 启用持久化请求调用日志、console 与运行时错误，调用采样 100%，`redact_query_string=true`；Traces 关闭，无外部导出。`node` 仍固定 `f3830c4374d3e6d48f14e889acf66a80570c5600`。
+- `lib/qqmusic.js` 删除失败重试日志中的原始 vkey/purl，保留尝试次数与上游错误码；回归测试先复现旧行为，再验证修复且成功音源 URL 保持完整。
+- 实际 Cloudflare Builds `1a409620-e460-4b79-a64e-cade7d2b0e49` 成功。该次生产 Worker `c79b0261-a695-4a4d-890e-14d67e1331c4`，`DEPLOY_VERSION=847176533c6c620c98b6cf89107db0fb38fdf70d`；三个域名 health 均为 200/ok，D1/R2/Analytics/域名/Cron 沿用。
+- 验收：QQ 针对测试 4/4；自动构建 137/137（根 24、Worker 84、前端 29）。GitHub Project checks `42017259180` 与 Project website `42017259273` 成功，包含本地 D1 集成与 Worker/Pages/文档构建。
+- 已在控制台 Observability 查询实际持久化事件：合成 health 请求 200，合成无效播放签名请求 401；查询串标记未保存，x-token/x-qq-token/x-kugou-token/x-kuwo-token 均为 REDACTED。URL 路径标记仍保留，已向用户说明 HLS 路径短期签名可能保存在日志，日志权限仅授予排障维护者。
+- 控制台确认当前 Free 套餐日志额度为 200K events/day，超额采样；日志入库界面提示最多 2 分钟延迟。构建及脱敏验收摘要在 `.codex/releases/2026-11-05-master-51c81ed/observability-build-8471765.log` 与 `observability-verification.json`。
+
+## 2.2.0 版本与 Release（2026-11-05，已发布）
+
+- 用户要求每次更新都修改版本号并更新 Release；已写入已推送的 `AGENTS.md`。新增 `CHANGELOG.md`，三个应用 package 与对应 lock 共 9 个版本字段统一为 2.2.0，根测试校验版本及最新更新记录一致性。前端版本继续来自根 package，health 的 version 仍为部署提交 SHA。
+- 发布提交及标签：`eadef145a04b59d1cd6c1eee3820aaf0b1ed05d0` / `v2.2.0`。GitHub Release 已发布并标记 Latest：https://github.com/znc15/MusicForUrl/releases/tag/v2.2.0 。旧 v2.1.1 Release 与冻结 node 保留。
+- 当前生产 Worker `41815286-f171-48db-9c97-50b6b0f6d4d1`，来自实际 Cloudflare build `2985ff67-22fc-4ee7-9819-771759b5705c`；三个域名 health=200/ok/eadef14，浏览器关于页实际显示“前端版本 2.2.0”。日志配置随仓库保留。
+- GitHub Project checks `42018830155`、Project website `42018829738` 成功；139/139 常规测试和 1/1 本地 D1 集成通过，React/Worker/Pages/文档构建完成。构建证据 `.codex/releases/2026-11-05-master-51c81ed/release-build-eadef14.log`。
+- 本版汇总已交付的 Cloudflare 拆分、第一批审计修复、自动部署和 Observability；第二轮 UI、Apple Music 与公告需求继续保留在 `OPTIMIZATION_BACKLOG.md`，尚待实施。
+
+## Apple Music 接入调研（2026-11-05）
+
+- 首批平台由用户选定为 Apple Music；已搜索 GitHub 并核对 Apple 官方文档，结果整合到 `OPTIMIZATION_BACKLOG.md` 的 R01 与 Apple Music 调研节。
+- 用户已选择 B，全曲直链用于 VRChat/AVPro。评估方向改为 Cloudflare 网站/API/签名链接 + 独立 Apple Music 原生音频服务；优先核查 `lbr77/apple-music-api`，`gamdl` 作为下载引擎参照。当前导出实际要求 MP3，优先验证独立服务输出 MP3并复用 Packed Audio。
+- GitHub 参考：anthony-liddle/apple-music-developer-token（MIT，签名核心）、Musish/Musish（旧 React/MusicKit，AGPL 与 package MIT 标注冲突）、glomatico/gamdl（Python/Rust 下载引擎）、lbr77/apple-music-api（原生 Linux/Android HTTP 音频服务）。后两项需要额外运行服务，现成 m4a/ALAC 输出还需格式适配与实播验证。
+- B 方案确认范围为继续可行性评估；官方站内路线保留为调研背景。用户确认测试环境和账号暂未准备，2.3.0 保留评估结果。后续受控实测需用户准备隔离 Linux/Docker 环境并自行完成有效订阅账号登录，提供 VRChat/AVPro 客户端；账号隔离、歌单读取、首播缓存和格式适配为关键验收点。
+- 深入核查 `lbr77/apple-music-api@3eb3b4a0b43d563ad4abee8513c26f73ea0755ce`：daemon 单活跃账号、缺少歌单详情/分页接口、缓存音频统一 Bearer 鉴权、冷请求等待下载完成；Subsonic 明确拒绝 MP3，普通 playback 的底层 MP3 支持待验证。B 计划据此列为单曲→本站签名直链→歌单与多用户→VRChat 实播→实施结论，附提交固定的源码链接与实测责任。

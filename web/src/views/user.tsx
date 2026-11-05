@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CoverArt, PlaylistCard } from '@/components/playlist-card';
+import { usePlaylistDetails } from '@/components/playlist-details';
 import { EmptyState, PageHeader } from '@/components/page-header';
 import { ListItem, ListReveal, Segmented } from '@/motion/primitives';
 import { useAuth } from '@/stores/auth';
@@ -88,6 +89,7 @@ export function UserView() {
   const openPlaylist = usePlayer(state => state.open);
   const navigate = useNavigate();
   const token = useAuth(state => state.tokens[platform]);
+  const { openDetails, details } = usePlaylistDetails(platform);
   const [tab, setTab] = React.useState('playlists');
   const [removing, setRemoving] = React.useState('');
   const user = users[platform];
@@ -117,7 +119,8 @@ export function UserView() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-5">
+    <div className="mx-auto flex w-full min-w-0 max-w-[1180px] flex-col gap-5">
+      {details}
       <PageHeader
         eyebrow="My music"
         title="我的音乐"
@@ -161,7 +164,7 @@ export function UserView() {
             <TabsTrigger value="playlists">我的歌单</TabsTrigger>
             <TabsTrigger value="favorites">我的收藏</TabsTrigger>
             <TabsTrigger value="recent">最近播放</TabsTrigger>
-            <TabsTrigger value="top">最常播放</TabsTrigger>
+            <TabsTrigger value="top">近 30 天常听</TabsTrigger>
           </TabsList>
 
           <TabsContent value="playlists">
@@ -174,7 +177,8 @@ export function UserView() {
                       name={item.name}
                       cover={item.cover}
                       meta={`${item.trackCount ?? item.songCount ?? 0} 首`}
-                      onOpen={() => void play(item.id)}
+                      onOpen={() => openDetails(item)}
+                      onPlay={() => void play(item.id)}
                     />
                   </ListItem>
                 ))}
@@ -194,7 +198,8 @@ export function UserView() {
                         name={item.name}
                         cover={item.cover}
                         meta={item.createdAt ? `收藏于 ${formatDateTime(item.createdAt)}` : ''}
-                        onOpen={() => void play(item.playlistId)}
+                        onOpen={() => openDetails({ ...item, id: item.playlistId })}
+                        onPlay={() => void play(item.playlistId)}
                       />
                       <div className="mt-1.5 flex gap-1.5">
                         <Button variant="ghost" size="sm" asChild>
@@ -242,7 +247,8 @@ export function UserView() {
                       name={item.name}
                       cover={item.cover}
                       meta={`${formatDateTime(item.playedAt)} · ${item.playCount} 次`}
-                      onOpen={() => void play(item.playlistId)}
+                      onOpen={() => openDetails({ ...item, id: item.playlistId })}
+                      onPlay={() => void play(item.playlistId)}
                     />
                   </ListItem>
                 ))}

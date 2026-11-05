@@ -13,6 +13,10 @@ import { effectiveVolume, useVolume } from '@/stores/volume';
 
 export function MiniPlayer() {
   const audioRef = React.useRef<HTMLAudioElement>(null);
+  const attachAudio = React.useCallback((audio: HTMLAudioElement | null) => {
+    audioRef.current = audio;
+    if (audio) audio.volume = effectiveVolume(useVolume.getState());
+  }, []);
   const playlist = usePlayer(state => state.playlist);
   const index = usePlayer(state => state.index);
   const source = usePlayer(state => state.source);
@@ -75,9 +79,9 @@ export function MiniPlayer() {
   React.useEffect(() => {
     const audio = audioRef.current;
     if (audio) audio.volume = effectiveVolume({ volume, muted });
-  }, [volume, muted, source?.mediaUrl]);
+  }, [volume, muted, source?.mediaUrl, generation]);
 
-  const paused = status === 'paused' || status === 'ended';
+  const paused = status !== 'playing';
   // 跳转由 store 里的定时器负责，这里只提示用户
   const willSkip = status === 'error' && errorCode === 'unavailable'
     && !!playlist && index + 1 < playlist.tracks.length;
@@ -99,7 +103,7 @@ export function MiniPlayer() {
     <div className="max-h-[50dvh] shrink-0 overflow-y-auto overscroll-contain border-t border-border bg-card shadow-[0_-14px_34px_-26px_rgb(20_70_105/60%)]">
       <audio
         key={generation}
-        ref={audioRef}
+        ref={attachAudio}
         onPlay={() => markPlaying(generation)}
         onPause={() => markPaused(generation)}
         onEnded={() => { if (usePlayer.getState().generation === generation) void next(); }}
@@ -140,7 +144,13 @@ export function MiniPlayer() {
             onClick={() => {
               const audio = audioRef.current;
               if (!audio) return;
-              if (audio.paused) void audio.play().catch(() => fail('播放被浏览器阻止'));
+              if (audio.paused) void audio.play().catch((error: unknown) => {
+                const current = usePlayer.getState();
+                if (audioRef.current !== audio || current.generation !== generation || current.source !== source) return;
+                if (error instanceof DOMException && error.name === 'AbortError') return;
+                fail(error instanceof DOMException && error.name === 'NotAllowedError'
+                  ? '播放被浏览器阻止，请再次点击播放' : '播放失败，请重试', generation);
+              });
               else audio.pause();
             }}
             className="grid size-10 place-items-center rounded-full bg-primary text-primary-foreground shadow-[0_10px_20px_-10px_var(--primary)] transition-transform hover:scale-105"

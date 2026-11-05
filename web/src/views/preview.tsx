@@ -12,6 +12,8 @@ import { usePlayer } from '@/stores/player';
 
 export function PreviewView() {
   const [input, setInput] = React.useState('');
+  const [inputError, setInputError] = React.useState('');
+  const inputRef = React.useRef<HTMLInputElement>(null);
   const [source, setSource] = React.useState<{ url: string; isHls: boolean; local: boolean } | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const playlist = usePlayer(state => state.playlist);
@@ -27,30 +29,33 @@ export function PreviewView() {
 
   async function open(event: React.FormEvent) {
     event.preventDefault();
+    setInputError('');
     const value = input.trim();
-    if (!value) return;
-
-    const stream = parseStreamUrl(value);
-    if (stream) {
-      setSource(null);
-      if (await openPlaylist(stream.platform, stream.playlistId, stream.grant)) toast.success('歌单已载入');
-      else if (usePlayer.getState().status === 'error') toast.error(usePlayer.getState().message);
-      return;
-    }
-
     try {
+      if (!value) throw new Error('请粘贴播放链接');
       const url = validateMediaUrl(value);
       const parsed = new URL(url);
+      try { decodeURIComponent(parsed.pathname); } catch { throw new Error('播放链接已损坏，请重新复制完整地址'); }
+      const stream = parseStreamUrl(url);
+      if (stream) {
+        setSource(null);
+        if (await openPlaylist(stream.platform, stream.playlistId, stream.grant)) toast.success('歌单已载入');
+        else if (usePlayer.getState().status === 'error') setInputError(usePlayer.getState().message);
+        return;
+      }
+      if (/\/playlist\/m3u8\//.test(parsed.pathname)) throw new Error('播放链接不完整，请重新复制');
       clearPlayer();
       setSource({ url, isHls: /\.m3u8$/i.test(parsed.pathname), local: false });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '链接无效');
+      setInputError(error instanceof Error ? error.message : '链接无效');
+      inputRef.current?.focus();
     }
   }
 
   function openFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    setInputError('');
     clearPlayer();
     setSource({ url: URL.createObjectURL(file), isHls: /\.m3u8$/i.test(file.name), local: true });
     setInput(file.name);
@@ -67,8 +72,11 @@ export function PreviewView() {
       <section className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-card)]">
         <form className="flex flex-col gap-2.5 sm:flex-row" onSubmit={open}>
           <Input
+            ref={inputRef}
+            aria-invalid={!!inputError}
+            aria-describedby={inputError ? 'preview-input-error' : undefined}
             value={input}
-            onChange={event => setInput(event.target.value)}
+            onChange={event => { setInput(event.target.value); setInputError(''); }}
             placeholder="粘贴播放链接或媒体直链"
             aria-label="媒体链接"
             autoComplete="off"
@@ -77,6 +85,7 @@ export function PreviewView() {
           />
           <Button type="submit" disabled={playerStatus === 'loading'} className="h-11 px-6"><MonitorPlay />{playerStatus === 'loading' ? '加载中…' : '打开'}</Button>
         </form>
+        {inputError && <p id="preview-input-error" role="alert" className="text-sm text-destructive">{inputError}</p>}
         <div className="flex flex-wrap items-center gap-2">
           <input ref={fileRef} type="file" accept="audio/*,video/*,.m3u8" className="hidden" onChange={openFile} />
           <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>

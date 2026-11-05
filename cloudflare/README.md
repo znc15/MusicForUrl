@@ -57,12 +57,12 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 ### 播放历史与保留
 
-- HLS 音频分片完整读取后才计入；HEAD、传输失败和主动取消不计入。直链模式在成功返回音频地址时计入。这些记录不代表已经完整收听。
-- 同一账号、歌单和歌曲在 5 分钟内的重复请求合并为一条；每个账号每分钟最多新增 12 条，超过时仍可播放。
-- 记录以 `(用户, 歌单, 歌曲)` 聚合存入 `play_stats`：**一次计入的播放只写一行**，重复播放累加 `play_count` 并刷新 `last_played_at_ms`，不再追加事件行。去重与每分钟限额由 INSERT 的 WHERE 守卫判断，被拒的播放不产生任何写入。
-- 保留策略按 `last_played_at_ms` 判断，保留 30 天。最近播放和热门歌曲统计只读取 30 天内的记录。每天 UTC 03:17 的 Cron 全站清理过期记录，同时清理 `playlists`、`song_sources`、`rate_limits` 与 `qr_sessions`。
+- 站内媒体与 HLS 分片在响应完整传输后计入；有 `Content-Length` 时核对实际字节数。HEAD、传输失败和主动取消跳过。直链模式在成功返回 302 时计入，来源分别记为 `player`、`hls`、`redirect`。指标衡量有效播放请求，实际收听时长仍需客户端证据。
+- 同一身份、歌单和歌曲在 5 分钟内去重，每个身份滚动一分钟最多新增 12 条；去重和限额只影响统计，播放照常。已登录身份使用内部账号 ID；游客使用服务密钥、Cloudflare 地址与 User-Agent 的哈希，不存原始地址。共享网络和相同客户端可能合并为同一游客身份。
+- `playback_events` 保存通过准入的事件，保留 30 天；同一次数据库写入的触发器同步更新永久 `playback_totals`，并为已登录账号更新兼容的 `play_stats` 个人聚合。游客事件的 `user_id` 为 NULL，无需创建账号记录。失败回滚事件和累计，重复请求不写入。
+- 30 天排行按事件发生时间筛选；个人最近播放继续使用原 `play_stats`。每天 UTC 03:17 的 Cron 清理过期事件和个人聚合，以及 `playlists`、`song_sources`、`rate_limits`、`qr_sessions`。永久累计保持不变。
 
-这样做的原因：旧实现每次播放执行 3 条语句，其中裁剪语句会扫描 1,000–2,000 行，一次 30 首歌的播放约消耗 **45,000 行读取**，对免费版每天 500 万行只够约 110 次播放。改为聚合后每次播放约 450 行读取、30 行写入。
+新口径为每条有效请求写入事件与永久累计；已登录账号另更新个人聚合。索引维护也消耗 D1 写入额度，发布后应观察实际 Rows written，旧版“一次播放只写一行”的容量估算已停止使用。
 
 **首次建库与旧库升级共用一个入口**。在 `cloudflare/` 目录执行：
 
@@ -70,11 +70,13 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 npm run db:migrate -- --local    # 本地开发库
 ```
 
-生产升级先保存数据库导出或 D1 Time Travel bookmark，再执行 `npm run db:migrate -- --remote`；检查成功后发布 Worker。迁移以 `schema_migrations` 记录版本 `0004-unified-platform-schema`，重复执行显示 `Already applied`。
+生产升级先保存数据库导出和 D1 Time Travel bookmark，再执行 `npm run db:migrate -- --remote`；检查成功后发布 Worker。当前版本为 `0005-persistent-playback-stats`，保留 `0004-unified-platform-schema` ledger，重复执行显示 `Already applied`。首次建库与尚未升级 0004 的旧库会依次完成两步。
 
 迁移会扩展旧 `users.platform` 约束、保留用户 ID 和关联数据、补齐 `duration_ms`、解除旧二维码平台限制。旧事件只回填缺失的聚合键；已有 `play_stats` 行保留原计数与时长，原事件继续存于 `play_logs`。新增历史时长为 `0`，表示未知；已经存在的时长保持原值。
 
-`db:local`、`db:remote` 及旧的 backfill/stats/qr npm 命令均转入统一迁移，旧 SQL 文件仅作为历史参考。回退 Worker 版本通常可继续使用升级后的表；恢复数据库原状态时使用迁移前备份或书签。
+0005 仅增加永久累计、30 天事件表、索引与原子更新触发器，账号、收藏、歌单、旧历史和 `site_stats` 原值保持。新累计从迁移时间 `startedAt` 起算；原历史缺少精确窗口和游客覆盖，作为历史记录保留。迁移和 ledger 一起提交，失败应先检查报错；原子导入回滚后可重跑同一命令。专项验证：`npm run test:migrations:local` 使用系统临时目录中的独立 D1 fixture。
+
+`db:local`、`db:remote` 及旧的 backfill/stats/qr npm 命令均转入统一迁移，旧 SQL 文件仅作为历史参考。回退 Worker 可保留增量表与既有数据；旧代码运行期间暂停新口径事件写入，重新发布后继续累计，并记录该覆盖缺口。需恢复数据库原状态时，先停止新写入并使用迁移前备份或书签；这会舍弃备份后的新数据，应先另存当前导出。
 
 升级前可以只读核对结构与外键，不读取账号密文或令牌：
 
@@ -88,22 +90,35 @@ PRAGMA foreign_key_check;
 
 ### 站点统计
 
-「关于」页的数字来自 `site_stats`，写入路径刻意分两类：
+`/api/stats` 返回 `version: 2`，保留原字段名，按以下来源读取：
 
 - **实时累加**：`parsedSongs`（每次解析到歌单时按曲目数累加）与 `generatedLinks`（每次签发播放链接累加）。旧版前端的 `/parse` + `/url` 与新前端的 `/generate` 都会计数，批量写入一次，不进入播放路径。这两个计数器从 2.1.0 开始计数：更早的请求没有留下可精确重建的记录，因此不做估算回填。
-- **聚合派生**：累计播放、总播放时长、收录曲目、歌单数与使用人数，从 `play_stats` 与 `users` 汇总。这是一次全表扫描，因此只在 Cron（每天 UTC 03:17，在清理之后）与惰性刷新时执行。
+- **累计有效播放请求**：`plays`、`playSources` 从永久 `playback_totals` 读取，覆盖已登录账号与游客；`startedAt` 为这组指标起算时间。保留期清理不减少累计。
+- **估算播放时长**：`playDurationMs` 累加每条有效记录当时已知的曲目时长，`knownDurationPlays` / `unknownDurationPlays` 显示覆盖。未知时长以及旧歌单缓存曾填入的 180 秒默认值按未知处理；曲目信息后续变化不会改写既往估算。
+- **已登录账号**：`listeners` 按 `users` 账号记录数计数，跨平台账号分别计入。
+- **30 天曲目与歌单**：`songs`、`playlists` 从近期事件按平台与 ID 去重；同曲跨歌单仅计一首。这三个派生指标在 Cron 和按 `STATS_REFRESH_MINUTES` 的惰性刷新中更新。
+
+缺失值返回 `null` 并列入 `unknown`，真实零值保留为 `0`。新派生快照使用 `site_stats` 的 `v2:songs` / `v2:playlists` / `v2:listeners`，保留旧口径行，避免部署与回退期间混算。快照按全部必需指标中最旧的时间判断新鲜度；刷新失败但有旧数据时返回 `stale: true`，首次无可用快照或数据库读取失败返回 503。`updatedAt` 对应派生快照时间，累计直接读取当前持久计数。
+
+公开 `/api/stats/top?limit=10` 提供 30 天全站歌曲排行（最多 50 条），按平台/歌曲合并并覆盖游客，返回 `windowDays`、`startedAt`、`since`、`updatedAt`、`stale`。边缘缓存 5 分钟，同 isolate 的冷请求合并；刷新失败最多回退 1 小时旧排行，再返回 503。个人 `/api[/qq]/history/top` 按登录账号隔离，使用独立查询；升级前的旧聚合继续用于个人历史，不回填为精确 30 天排行。
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
-| `STATS_REFRESH_MINUTES` | 派生统计的最小刷新间隔；调大可以降低扫描成本，代价是数字变旧 | `60` |
+| `STATS_REFRESH_MINUTES` | 账号数与 30 天曲目/歌单快照的最小刷新间隔 | `60` |
 
-游客播放（酷我，以及未登录的酷狗）没有 `users` 行，播放不写 `play_stats`，但会写入 Analytics Engine，因此仍计入匿名汇总。播放记录、收藏与歌单缓存的账号归属规则见 [平台与账号模型](PLATFORMS.md#多账号与数据归属)。
+播放记录、收藏与歌单缓存的账号归属规则见 [平台与账号模型](PLATFORMS.md#多账号与数据归属)。Analytics Engine 用于分析，界面统计读取 D1。
+
+### 歌单完整性与重试
+
+解析和生成响应新增 `totalCount`（上游总数）、`includedCount`（有效曲目数）、`partialReason`；原 `songCount` 维持总数语义。部分结果保留成功分页，短缓存 60 秒；重新生成同一歌单立即重取部分结果，完整缓存仍沿用 `CACHE_TTL`。原因值为 `upstream_page_failed`、`platform_limit`、`missing_tracks`，完整时为 NULL。实际 M3U8 条目数与 `includedCount` 一致。生成/取链接还返回 `expiresAt`，直接取自签名载荷的到期时间（毫秒）。
+
+歌单缓存 `songs_json` 新写入版本 2 envelope，兼容读取旧数组。旧 Worker 回滚读取新格式时会重新取歌单；收藏和账号数据不变。
 
 ### 配额、降级与可观测性
 
 免费版的关键上限：Worker 请求 **10 万/天**、CPU **10 ms/次调用**、D1 行读取 500 万/天、行写入 10 万/天（**超额直接报错**，自 2026-09-01 起）、R2 Class A 100 万/月。静态资源请求由 assets 层直接返回，**不要放宽 `run_worker_first: ["/api/*"]`**，否则静态资源会开始计费。
 
-一次 30 首歌的播放约消耗 31 次 Worker 请求与 30 次 D1 写入，因此免费版的实际上限约 **3,200 次播放/天**，请求数、D1 写入与 AE 数据点同时卡在这个数量级。
+一次 30 首歌的完整导出播放至少包含歌单和 30 次媒体请求；实际写入还包括统计触发器、索引和可选缓存。容量按当前控制台用量评估，分别观察 Worker 请求、D1 Rows read/written 和 AE 数据点。
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
@@ -125,7 +140,7 @@ PRAGMA foreign_key_check;
 
 酷狗、酷我的小型上游响应有 15 秒请求与读取预算，实际响应体上限 2 MiB；酷我音源 URL 响应上限 16 KiB，酷狗歌单分页链总预算 30 秒。音频使用独立流式代理，登录和短信调用保持单次提交。
 
-遥测写入 Analytics Engine 的 `mfu_playback`（每次计入的播放一个数据点）与 `mfu_requests`（控制面请求，默认 1/10 抽样，媒体与分片请求不记）。**AE 不承载正确性**：绑定缺失、写入失败或超额都只影响分析数据，UI 读取一律走 D1。在 Dashboard 关注 Requests/day、CPU p50/p99、D1 Rows read/written 与 **R2 Class A**（冷播放每次歌单产生 30 次填充写入，未加护栏时月度额度会在月初被打满）。
+遥测写入 Analytics Engine 的 `mfu_playback`（通过准入的播放一个数据点）与 `mfu_requests`（默认 1/10 抽样）。成功媒体/分片跳过请求事件，失败记录标准路由和安全分类：authorization、upstream、format、rate_limit、stream_read、cancelled 等；响应头之后的流失败使用 `media_failure`，分类在 `blobs[6]`。事件省略原始 URL、签名、查询串和异常消息。绑定缺失、写入失败或超额只影响分析数据。在 Dashboard 关注 Requests/day、CPU p50/p99、D1 Rows read/written 与 **R2 Class A**。
 
 `/api/health` 返回 `{ status, degradeMode, version, features }`，可接入外部免费探活监控。建议同时为请求数、错误率、D1 读写与 R2 Class A 配置 Dashboard 通知。
 
@@ -145,9 +160,15 @@ PRAGMA foreign_key_check;
 
 Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind + shadcn/ui**，构建产物 `web/dist` 由 Worker 的 `assets` 绑定提供。静态资源请求由 assets 层直接返回、不计入 Worker 请求数，因此前端体积不影响免费额度，只影响首屏速度。视图按路由分包，`hls.js` 只在预览页真正打开 HLS 源时才按需加载。
 
-左侧导航统一提供链接生成、我的音乐、媒体预览、账号管理和关于页面；收起时底部只保留一个跟随当前平台的账号头像、外观与音量入口和展开按钮。窄屏显示紧凑导航；页面、列表、分段控件与弹窗由 `motion`（framer-motion）控制，并响应系统的减少动态效果设置，详见[动画说明](ANIMATION.md)。界面延续天蓝与白色调色板与亮暗主题，但改用实色卡片、1px 边框与 2px 小圆角，不再使用玻璃拟态。
+桌面侧栏提供链接生成、我的音乐、媒体预览、账号管理和关于页面，底部保留当前平台账号头像与展开按钮；展开后显示外观选择。手机主导航采用五列图标和“生成 / 音乐 / 预览 / 账号 / 关于”文字。顶栏提供公告、账号菜单和主题切换，音量位于常驻播放条。界面沿用蓝色主题、实色卡片、边框和统一圆角，页面保留唯一主标题。
 
-字体使用 **HarmonyOS Sans SC**，字库由 `cn-font-split` 按 `unicode-range` 切成多个 woff2 子集（只引入 400 / 500 / 600 三档），浏览器按页面实际用字下载，并带 `font-display: swap` 避免首屏空白。构建脚本用 `cross-env` 强制 `NODE_ENV=production`，避免误打开发版 React；首页直接进入主包，其余路由、播放条与登录弹窗按需加载，依赖拆成 react、radix、sonner、icons 等长缓存块。
+字体采用 `web/src/fonts.css` 定义的**系统字体栈**：`system-ui`、Apple 系统字体、Segoe UI、苹方、微软雅黑及 sans-serif 回退。`index.css` 通过 `--font-ui` 应用到正文，界面无需下载中文网络字库。构建脚本用 `cross-env` 设置 `NODE_ENV=production`；首页进入主包，其余路由、播放条与登录弹窗按需加载，依赖拆成 react、radix、sonner、icons 等长缓存块。
+
+平台选择使用 `Segmented` 的共享选中背景，内容分类使用单行下划线标签；窄屏横向滚动并保留完整文字。列表与分段背景使用 `motion`，页面、Dialog 和切换内容使用 CSS 动画。登录弹窗首次打开后保留组件挂载，让 Radix Presence 完成退出；共享 Dialog 支持焦点恢复和减少动态效果。参数与生命周期见[动画说明](ANIMATION.md)。
+
+歌单卡片主点击打开详情，生成后显示实际纳入数量、到期时间与“复制播放地址”“播放”；部分结果可重新获取，复制失败会选中地址供手动复制。封面上的独立播放按钮仍可直接播放。首页结果复用同一组地址操作。
+
+公告由 `web/src/lib/announcements.ts` 维护。2.3.0 内置 `release-2.3.0`：“歌单复制与播放体验更新”（2026-11-05）。新 ID 首次自动展示，关闭后按 ID 记录本机已读，顶栏可随时重开；登录操作优先，公告在登录弹窗关闭后延迟展示，当前播放保持。存储不可用时仍在当前页面会话记住关闭；有效公告为空时隐藏入口。
 
 `web/public/_headers` 负责静态资源的缓存策略：`/assets/*`（带内容哈希）永久缓存，其余路径（HTML 与 SPA 回退）为 `max-age=0, must-revalidate` 并额外带 **`no-transform`**——最后一个指令让 Cloudflare 边缘不改写 HTML，从而不会自动注入 Web Analytics 的 `beacon.min.js`（本站统计走自己的 Analytics Engine，不需要它）。注意 `_headers` 的规则按文件顺序应用，后面的规则会覆盖同名头，所以通配规则写在最前、具体路径写在最后，否则两个 `max-age` 会被逗号拼成无效值。
 

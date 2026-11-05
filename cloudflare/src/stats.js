@@ -1,78 +1,44 @@
-// 站点统计。
-//
-// 设计取舍：这些数字是「关于」页的门面，不值得为它增加播放路径上的写入。
-//   - 累计解析歌曲数 / 生成链接数：每次解析歌单（/parse、/generate）与每次签发链接（/url、/generate）
-//     各累加一次，低频写入，实时。旧版前端走 /parse + /url，新前端走 /generate，两条路径都计数。
-//   - 累计播放次数 / 总播放时长 / 使用人数 / 收录曲目数：从 play_stats 与 users 聚合，
-//     放在 cron 与按 TTL 触发的惰性刷新里算，绝不进入请求路径。
-//
-// 聚合是一次全表扫描，所以刷新频率由 STATS_REFRESH_MINUTES 控制（默认 60 分钟）。
-// 播放量增长到扫描成本敏感时，把这个值调大即可，代价只是「关于」页的数字变旧。
+import { PLAY_LOG_RETENTION_MS } from './playback-history.js';
 
 const STATS_KEYS = ['parsedSongs', 'generatedLinks', 'plays', 'playDurationMs', 'listeners', 'songs', 'playlists'];
-const DEFAULT_REFRESH_MINUTES = 60;
-const MIN_REFRESH_MINUTES = 5;
-
-// 刷新是 isolate 级的：并发请求不会同时发起同一个全表扫描
-let refreshing = null;
+const SNAPSHOT_KEYS = ['listeners', 'songs', 'playlists'];
+const refreshing = new WeakMap();
 
 function refreshMinutes(env) {
   const value = Number(env?.STATS_REFRESH_MINUTES);
-  return Number.isInteger(value) && value >= MIN_REFRESH_MINUTES ? value : DEFAULT_REFRESH_MINUTES;
+  return Number.isInteger(value) && value >= 5 ? value : 60;
 }
 
-function emptyStats() {
-  return {
-    parsedSongs: 0, generatedLinks: 0, plays: 0, playDurationMs: 0,
-    listeners: 0, songs: 0, playlists: 0, updatedAt: 0,
-  };
-}
-
-/**
- * 解析/签发链接时累加，批量写入一次往返。
- *
- * 旧版前端走 /parse + /url，新前端走 /generate，因此两个入口都要计数：
- * 每份被解析的歌单记一次 parsedSongs，每签发一个播放链接记一次 generatedLinks。
- * 失败只影响统计，绝不影响生成结果。
- */
 async function bumpParsedSongs(env, songCount, links = 0) {
-  const songs = Math.max(0, Number(songCount) || 0);
-  const count = Math.max(0, Number(links) || 0);
-  if (!songs && !count) return;
   const now = Date.now();
-  const bump = (key, value) => env.DB.prepare(`
-    INSERT INTO site_stats (key, value, updated_at_ms) VALUES (?, ?, ?)
-    ON CONFLICT (key) DO UPDATE SET value = site_stats.value + excluded.value
-  `).bind(key, value, now);
-  const statements = [];
-  if (songs) statements.push(bump('parsedSongs', songs));
-  if (count) statements.push(bump('generatedLinks', count));
+  const rows = [['parsedSongs', songCount], ['generatedLinks', links]]
+    .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) > 0);
+  if (!rows.length) return;
   try {
-    await env.DB.batch(statements);
-  } catch (error) {
-    console.warn('[Stats] bump failed', error.message);
-  }
+    await env.DB.batch(rows.map(([key, value]) => env.DB.prepare(`
+      INSERT INTO site_stats (key, value, updated_at_ms) VALUES (?, ?, ?)
+      ON CONFLICT (key) DO UPDATE SET value = site_stats.value + excluded.value, updated_at_ms = excluded.updated_at_ms
+    `).bind(key, Math.floor(Number(value)), now)));
+  } catch (_) { console.warn('[Stats] counter_write_failed'); }
 }
 
-/** 重算派生指标。只有 cron 与惰性刷新会调用。 */
+// Only the account/catalog snapshot is TTL cached. Lifetime counts are durable
+// counters, never recomputed from the 30-day event retention window.
 async function refreshSiteStats(env) {
   const now = Date.now();
   const derived = await env.DB.prepare(`
-    SELECT COALESCE(SUM(play_count), 0) AS plays,
-      COALESCE(SUM(play_count * duration_ms), 0) AS duration,
-      COUNT(*) AS songs,
-      COUNT(DISTINCT playlist_id) AS playlists
-    FROM play_stats
-  `).first();
+    SELECT COUNT(*) AS songs FROM (
+      SELECT platform, song_id FROM playback_events WHERE played_at_ms >= ? GROUP BY platform, song_id
+    )
+  `).bind(now - PLAY_LOG_RETENTION_MS).first();
+  const playlists = await env.DB.prepare(`
+    SELECT COUNT(*) AS playlists FROM (
+      SELECT platform, playlist_id FROM playback_events WHERE played_at_ms >= ? GROUP BY platform, playlist_id
+    )
+  `).bind(now - PLAY_LOG_RETENTION_MS).first();
   const users = await env.DB.prepare('SELECT COUNT(*) AS total FROM users').first();
-
-  const rows = [
-    ['plays', Number(derived?.plays) || 0],
-    ['playDurationMs', Number(derived?.duration) || 0],
-    ['songs', Number(derived?.songs) || 0],
-    ['playlists', Number(derived?.playlists) || 0],
-    ['listeners', Number(users?.total) || 0],
-  ];
+  const rows = [['v2:songs', derived?.songs], ['v2:playlists', playlists?.playlists], ['v2:listeners', users?.total]];
+  if (rows.some(([, value]) => !Number.isFinite(value) || value < 0)) throw new Error('stats_snapshot_incomplete');
   await env.DB.batch(rows.map(([key, value]) => env.DB.prepare(`
     INSERT INTO site_stats (key, value, updated_at_ms) VALUES (?, ?, ?)
     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms
@@ -82,30 +48,47 @@ async function refreshSiteStats(env) {
 
 async function readRows(env) {
   const result = await env.DB.prepare('SELECT key, value, updated_at_ms FROM site_stats').all();
-  const stats = emptyStats();
+  const stats = Object.fromEntries(STATS_KEYS.map(key => [key, null]));
+  const times = new Map();
   for (const row of result.results || []) {
-    if (STATS_KEYS.includes(row.key)) stats[row.key] = Number(row.value) || 0;
-    stats.updatedAt = Math.max(stats.updatedAt, Number(row.updated_at_ms) || 0);
+    const key = row.key.startsWith('v2:') ? row.key.slice(3) : row.key;
+    if (!((row.key.startsWith('v2:') && SNAPSHOT_KEYS.includes(key)) || ['parsedSongs', 'generatedLinks'].includes(row.key))) continue;
+    if (Number.isFinite(row.value) && row.value >= 0) {
+      stats[key] = row.value;
+      times.set(key, Number(row.updated_at_ms) || 0);
+    }
   }
+  // v2-prefixed keys separate precise event snapshots from legacy aggregates,
+  // including writes by an older Worker during deploy/rollback transitions.
+  const totals = await env.DB.prepare('SELECT * FROM playback_totals WHERE id = 1').first();
+  if (!totals) throw new Error('playback_totals_missing');
+  Object.assign(stats, { version: 2, startedAt: totals.started_at_ms, plays: totals.plays,
+    playDurationMs: totals.duration_ms, knownDurationPlays: totals.known_duration_plays,
+    unknownDurationPlays: totals.plays - totals.known_duration_plays,
+    playSources: { player: totals.player_plays, hls: totals.hls_plays, redirect: totals.redirect_plays },
+    rankingWindowDays: 30, updatedAt: Math.min(...SNAPSHOT_KEYS.map(key => times.get(key) || 0)),
+  });
+  stats.unknown = STATS_KEYS.filter(key => stats[key] === null);
+  stats.stale = !stats.updatedAt || Date.now() - stats.updatedAt >= refreshMinutes(env) * 60000;
   return stats;
 }
 
-/**
- * 读统计。数据过期时同步刷新一次再返回，保证「关于」页的数字不会长期停在 0；
- * 刷新失败（例如额度耗尽）只退回旧值，不抛错。
- */
-async function readSiteStats(env) {
-  const stats = await readRows(env);
-  if (stats.updatedAt && Date.now() - stats.updatedAt < refreshMinutes(env) * 60 * 1000) return stats;
+function unavailable() { return Object.assign(new Error('统计暂时不可用，请稍后重试'), { status: 503 }); }
 
-  // 并发请求共用同一次刷新，避免同时发起多个全表扫描
-  refreshing ||= refreshSiteStats(env).finally(() => { refreshing = null; });
-  try {
-    await refreshing;
-    return await readRows(env);
-  } catch (error) {
-    console.warn('[Stats]', error.message);
-    return stats;
+async function readSiteStats(env) {
+  let stats;
+  try { stats = await readRows(env); } catch (_) { throw unavailable(); }
+  if (!stats.stale) return stats;
+  let pending = refreshing.get(env.DB);
+  if (!pending) {
+    pending = refreshSiteStats(env).finally(() => refreshing.delete(env.DB));
+    refreshing.set(env.DB, pending);
+  }
+  try { await pending; return await readRows(env); }
+  catch (_) {
+    console.warn('[Stats] snapshot_refresh_failed');
+    if (SNAPSHOT_KEYS.every(key => stats[key] === null)) throw unavailable();
+    return { ...stats, stale: true };
   }
 }
 

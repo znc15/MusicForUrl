@@ -1,10 +1,4 @@
-/* HarmonyOS Sans SC（鸿蒙字体）。
- *
- * 字体已用 cn-font-split 按 unicode-range 切成多个 woff2，浏览器只下载页面实际
- * 用到的子集，不会一次拉取整套中文字库。界面只用 400 / 500 / 600 三档，
- * 因此只引入这三份；每份 @font-face 都带 font-display: swap，字体未就绪时先显示
- * 系统中文字体，避免首屏空白。
- */
-@import "../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular.css";
-@import "../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Medium.css";
-@import "../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Semibold.css";
+/* System fonts render immediately without downloading a Chinese webfont for every weight. */
+:root {
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}

@@ -204,8 +204,9 @@ function trackCap(env) {
 }
 
 async function getPlaylistDetail(playlistId, cookie, env) {
+  const cap = trackCap(env);
   const result = await requestNetease('/api/v6/playlist/detail', {
-    id: playlistId, n: trackCap(env), s: 8,
+    id: playlistId, n: cap, s: 8,
   }, { cookie });
   const playlist = result.body?.playlist;
   if (result.body?.code !== 200 || !playlist) {
@@ -221,11 +222,16 @@ async function getPlaylistDetail(playlistId, cookie, env) {
   if (Number(playlist.trackCount) > tracks.length) {
     console.warn(`[Playlist] truncated ${playlist.id}: ${tracks.length}/${playlist.trackCount}`);
   }
+  const totalCount = Math.max(Number(playlist.trackCount) || 0, tracks.length);
   return {
     id: playlist.id,
     name: playlist.name || '',
     cover: playlist.coverImgUrl || '',
-    songCount: Number(playlist.trackCount) || tracks.length,
+    songCount: totalCount,
+    totalCount,
+    includedCount: tracks.length,
+    partialReason: tracks.length >= totalCount ? null
+      : tracks.length >= cap ? 'platform_limit' : 'missing_tracks',
     tracks,
   };
 }

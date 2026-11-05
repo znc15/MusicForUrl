@@ -100,14 +100,14 @@ export function AccountMenu() {
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="min-w-0 sm:relative">
       <button
         type="button"
         onClick={() => setOpen(value => !value)}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label="账号"
-        className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 text-[13px] transition-colors hover:bg-accent"
+        className="inline-flex h-9 max-w-full items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 text-[13px] transition-colors hover:bg-accent"
       >
         {signedIn.length ? (
           <span className="flex shrink-0 items-center">
@@ -123,24 +123,24 @@ export function AccountMenu() {
             ))}
           </span>
         ) : (
-          <span className="grid size-6 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
+          <span className="grid size-6 shrink-0 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
             <UserRoundPlus className="size-3.5" />
           </span>
         )}
-        <span className="max-w-[8rem] truncate text-center font-medium">
+        <span className="min-w-0 max-w-[8rem] flex-1 truncate text-center font-medium">
           {primary ? (users[primary.id]?.nickname || '已登录') : '登录音乐账号'}
         </span>
         {signedIn.length > 1 && (
-          <span className="text-[11.5px] text-muted-foreground">+{signedIn.length - 1}</span>
+          <span className="shrink-0 text-[11.5px] text-muted-foreground">+{signedIn.length - 1}</span>
         )}
-        <ChevronDown className={cn('size-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} />
+        <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
 
       {open && (
         <div
           role="dialog"
           aria-label="账号"
-          className="absolute right-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] max-h-[calc(100dvh-8rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover shadow-lg"
+          className="absolute right-3 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] max-h-[calc(100dvh-8rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover shadow-lg sm:right-0"
         >
           <div className="divide-y divide-border">
             {ACCOUNT_PLATFORMS.map(item => (
