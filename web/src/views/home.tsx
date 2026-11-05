@@ -289,8 +289,8 @@ export function HomeView() {
             <MonitorPlay className="size-[18px]" />
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-semibold">媒体预览</span>
-            <span className="block text-[12.5px] text-muted-foreground">打开媒体链接或本地文件</span>
+            <span className="block text-sm font-semibold">播放器</span>
+            <span className="block text-[12.5px] text-muted-foreground">歌单、媒体链接与本地文件</span>
           </span>
         </Link>
         <Link

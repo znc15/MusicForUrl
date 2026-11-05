@@ -4,7 +4,7 @@ export type ViewName = 'home' | 'user' | 'preview' | 'accounts' | 'about';
 export const VIEW_TITLES: Record<ViewName, string> = {
   home: '链接生成',
   user: '我的音乐',
-  preview: '媒体预览',
+  preview: '播放器',
   accounts: '账号管理',
   about: '关于',
 };

@@ -11,13 +11,20 @@ export function AnnouncementDialog() {
   const loginOpen = useUi(state => state.loginOpen);
   const showAnnouncement = useUi(state => state.showAnnouncement);
   const closeAnnouncement = useUi(state => state.closeAnnouncement);
+  const [fullscreen, setFullscreen] = React.useState(() => !!document.fullscreenElement);
 
   React.useEffect(() => {
-    if (!pending || loginOpen) return;
+    const sync = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+
+  React.useEffect(() => {
+    if (!pending || loginOpen || fullscreen) return;
     // Let the preceding dialog finish returning focus before opening another.
     const timer = window.setTimeout(showAnnouncement, 220);
     return () => window.clearTimeout(timer);
-  }, [pending, loginOpen, showAnnouncement]);
+  }, [pending, loginOpen, fullscreen, showAnnouncement]);
 
   if (!item) return null;
   return (

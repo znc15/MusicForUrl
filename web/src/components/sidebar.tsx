@@ -19,7 +19,7 @@ const ICONS: Record<ViewName, typeof Link2> = {
   about: Info,
 };
 
-const MOBILE_LABELS: Record<ViewName, string> = { home: '生成', user: '音乐', preview: '预览', accounts: '账号', about: '关于' };
+const MOBILE_LABELS: Record<ViewName, string> = { home: '生成', user: '音乐', preview: '播放', accounts: '账号', about: '关于' };
 
 const EXPANDED_WIDTH = 252;
 const COLLAPSED_WIDTH = 76;

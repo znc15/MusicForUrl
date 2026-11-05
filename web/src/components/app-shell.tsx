@@ -11,6 +11,7 @@ import { routeFromPath } from '@/lib/routes';
 
 // 播放条只有真正打开歌单后才出现，连同它的 Radix Select 一起按需加载
 const MiniPlayer = React.lazy(() => import('@/components/mini-player').then(module => ({ default: module.MiniPlayer })));
+const PlaybackEngine = React.lazy(() => import('@/components/playback-engine').then(module => ({ default: module.PlaybackEngine })));
 // 登录弹窗只在点击后出现，没必要和首屏一起下载
 const AnnouncementDialog = React.lazy(() => import('@/components/announcement-dialog').then(module => ({ default: module.AnnouncementDialog })));
 const LoginDialog = React.lazy(() => import('@/components/login-dialog').then(module => ({ default: module.LoginDialog })));
@@ -20,6 +21,7 @@ function PlayerSlot() {
   if (!hasPlaylist) return null;
   return (
     <React.Suspense fallback={null}>
+      <PlaybackEngine />
       <MiniPlayer />
     </React.Suspense>
   );
