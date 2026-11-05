@@ -2,7 +2,7 @@
 
 ## 当前方向（2026-11-05）
 
-**当前阶段：2.3.0 已实现并通过本地验收，生产数据库增量迁移完成，准备推送与部署。** 用户确认统计采用持久累计有效播放请求（含游客）、估算播放时长、已登录账号及独立 30 天排行；Apple Music 测试环境/账号暂未准备，本轮保留 B 方案评估结果。B01—B06、U01—U07、P01、E01 已实施；验收与发布状态见下节。
+**当前阶段：2.3.0 已推送、部署并发布 GitHub Release。** 用户确认统计采用持久累计有效播放请求（含游客）、估算播放时长、已登录账号及独立 30 天排行；Apple Music 测试环境/账号暂未准备，本轮保留 B 方案评估结果。B01—B06、U01—U07、P01、E01 已交付；验收与发布状态见下节。
 
 ## 2.3.0 实施与验收（2026-11-05）
 
@@ -13,7 +13,11 @@
 - 隔离浏览器合成数据验收：详情无自动播放、复制/重取、收藏/最近入口、A/B 登录竞争、键盘焦点、减弱动效、空输入和损坏链接；统计未知为 —、真实零、旧数据重试；终曲重建静音保持 0、非静音保持 0.2；公告与登录切换期间同一音频元素且 pause 事件为 0。320px 深色与 375/768/1440px 浅色截图已实际查看；字体请求为 0。
 - 生产 D1 已备份并应用 `0005-persistent-playback-stats`。原表迁移前后数量相同：users 48、playlists 3、favorites 2、play_stats 405、play_logs 284；外键违规 0，ledger 包含 0004 与 0005。新累计起算 `1793883320000`（2026-11-05T12:55:20Z），初始 plays=0。
 - 备份与发布证据：`.codex/releases/2026-11-05-2.3.0/`；迁移前书签 `00000357-00000000-0000511a-26ed0af386d2b89c86b6b5ad48aec137`。前一 Worker 为 `41815286-f171-48db-9c97-50b6b0f6d4d1`，可回退代码并保留增量表。测试/UI 证据 `.codex/audits/2026-11-05-update/`。
-- 待完成：推送候选、Cloudflare 自动部署、线上版本/API/界面、GitHub Actions 与 v2.3.0 Release。真实四平台账号与 VRChat/AVPro 实播仍需账号和客户端参与；Apple Music 等用户准备隔离环境与有效订阅账号后继续评估。
+- 发布提交 `6bfb55e30c3229cb0c08b715ef807487d8bd86a4` 已推送 master；`v2.3.0` 标签准确指向该提交，[GitHub Release](https://github.com/znc15/MusicForUrl/releases/tag/v2.3.0) 已发布并标记 Latest。node 继续冻结于 `f3830c4374d3e6d48f14e889acf66a80570c5600`。
+- Cloudflare 自动构建 `c00cbe2a-f7c6-4d2d-a450-97ea26a026ec` 成功，生产 Worker `0f2699bc-ed3b-475b-b58a-094d129e877e`。三个域名 health 均 200/ok/6bfb55e；DB、R2、两项 Analytics、ASSETS、ENCRYPTION_KEY 绑定、域名和 Cron 保持。
+- 线上 stats 为 version=2、startedAt=1793883320000、stale=false；原解析数 14835、生成数 52、账号数 48。公开排行 200、30 天窗口；新累计初始为 0。实际浏览器关于页显示 2.3.0，公告首次展示；375px 首页无横向溢出、无页面异常、字体请求 0，截图已查看。
+- GitHub [Project checks 42031722958](https://github.com/znc15/MusicForUrl/actions/runs/42031722958) 与 [Project website 42031722805](https://github.com/znc15/MusicForUrl/actions/runs/42031722805) 均成功；CI 复验 183/183、本地 D1 集成 1/1 以及 React/Worker/Pages/文档构建，文档站已发布。
+- 后续依赖：真实四平台账号登录和 VRChat/AVPro 实播需账号与客户端参与；Apple Music 等用户准备隔离 Linux/Docker 环境、有效订阅测试账号后继续 B 方案评估。媒体 AE 分类已有测试和线上绑定验证，真实上游流失败的入库分布留待生产流量观察。
 
 用户决定采用两个分支，后续仅维护 Cloudflare 方案，传统 Node.js 方案保持冻结。
 
