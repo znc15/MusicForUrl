@@ -129,6 +129,14 @@ PRAGMA foreign_key_check;
 
 `/api/health` 返回 `{ status, degradeMode, version, features }`，可接入外部免费探活监控。建议同时为请求数、错误率、D1 读写与 R2 Class A 配置 Dashboard 通知。
 
+#### Workers Observability 日志
+
+`wrangler.jsonc` 启用 Workers Logs，按调用 **100% 采样**，保留请求调用日志、应用 `console` 日志及运行时错误。打开 Cloudflare 控制台 → Workers & Pages → `music-for-url` → **Observability**，按时间、响应状态或 Request ID 查询。请求日志同时覆盖播放器媒体与 HLS 分片；上面的 Analytics Engine 仍沿用自己的采样与统计口径。
+
+配置开启 `redact_query_string`，从日志请求 URL 中删除查询串。HLS 播放链接的短期签名位于路径中，仍可能保存在日志；日志访问权限应仅授予需要排障的维护者。应用日志去掉 QQ 音源 `vkey` 原值。Traces 保持关闭，未配置外部日志导出。
+
+后续部署会继续应用仓库内的配置。需要降低日志量时，在 `observability.logs.head_sampling_rate` 设置 0 到 1 之间的比例；同一次调用中的错误日志也受该采样影响。日志额度与保留时长随账户套餐调整，查看 [Workers Logs 官方说明](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)及控制台用量。
+
 ### 音源解析缓存
 
 音源地址只活 90 秒，放进 D1 会让每次解析都产生一次写入。改为写入 Cache API（键为 `https://resolve.mfu.internal/<sha256>`，**必须是绝对 URL**，裸哈希会被 Cache API 拒绝），命中时零 D1 读写。缓存键只到账号维度：`token_hash` 会在重新登录或退出时轮换，把它写进键里会让整个缓存失效。没有 Cache API 的环境（例如 `node --test`）自动回退到 `song_sources` 表。

@@ -53,6 +53,35 @@ test('QQ profile lookup fails closed and only enriches an independently confirme
   assert.equal(result.nickname, 'Trusted nickname');
 });
 
+test('QQ song URL retry logs keep diagnostics without playback credentials', async t => {
+  const vkey = 'fixture-private-playback-key';
+  const purl = `fixture-song.mp3?vkey=${vkey}`;
+  const warnings = [];
+  let calls = 0;
+  t.mock.method(console, 'warn', (...args) => warnings.push(args.join(' ')));
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return Response.json({
+      req_0: {
+        code: calls === 1 ? 1001 : 0,
+        data: {
+          midurlinfo: [{ purl: calls === 1 ? '' : purl, vkey }],
+          sip: ['https://stream.example.test/'],
+        },
+      },
+    });
+  });
+
+  const result = await qqmusic.getSongResource('fixture-song-mid', '', 'low', 2);
+  assert.equal(result.url, `https://stream.example.test/${purl}`);
+  assert.equal(calls, 2);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /尝试 1\/2 songMid=fixture-song-mid 失败: code=1001/);
+  assert.equal(warnings[0].includes(vkey), false);
+  assert.equal(warnings[0].includes(purl), false);
+  assert.doesNotMatch(warnings[0], /(?:vkey|purl)=/);
+});
+
 // The Worker runs without nodejs_compat, so a stray Node global is a runtime 500
 // that no other test would catch. Walk the Worker's own import graph and refuse
 // any Node-only global in a file that ships inside the bundle.
