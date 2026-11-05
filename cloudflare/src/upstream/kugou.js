@@ -12,6 +12,7 @@
 // 可在 wrangler 里用 GUEST_PLAYLIST_MAX_PAGES 调整。
 
 import { checkLoginStatus, checkQRCode, createQRCode } from './kugou-login.js';
+import { upstreamRequest } from './request.js';
 
 const API_ORIGIN = 'https://m.kugou.com';
 const SONG_ORIGIN = 'https://mobiles.kugou.com';
@@ -42,8 +43,8 @@ function headers(extra = {}) {
   };
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, { headers: headers(), redirect: 'follow' });
+async function fetchJson(url, signal) {
+  const response = await upstreamRequest(url, { headers: headers(), redirect: 'follow', signal });
   if (!response.ok) throw new KugouError(`酷狗接口返回 ${response.status}`, 502);
   const text = await response.text();
   try {
@@ -97,8 +98,8 @@ function trackOf(item, hashes) {
  * 注意 m.kugou.com 的 plist 接口会忽略 page / pagesize，永远只返回前 10 首，
  * 所以它只用来取元数据，曲目列表走下面的 special/song。
  */
-async function fetchMeta(playlistId) {
-  const body = await fetchJson(`${API_ORIGIN}/plist/list/${encodeURIComponent(playlistId)}?json=true`);
+async function fetchMeta(playlistId, signal) {
+  const body = await fetchJson(`${API_ORIGIN}/plist/list/${encodeURIComponent(playlistId)}?json=true`, signal);
   const list = body?.list?.list;
   if (!Array.isArray(list?.info)) {
     // 歌单不存在或已被删除时上游同样返回 200，只是没有 info
@@ -112,25 +113,26 @@ async function fetchMeta(playlistId) {
   };
 }
 
-async function fetchSongPage(playlistId, page) {
+async function fetchSongPage(playlistId, page, signal) {
   const query = new URLSearchParams({
     specialid: String(playlistId), page: String(page), pagesize: String(PAGE_SIZE),
     version: '9108', plat: '0',
   });
-  const body = await fetchJson(`${SONG_ORIGIN}/api/v3/special/song?${query}`);
+  const body = await fetchJson(`${SONG_ORIGIN}/api/v3/special/song?${query}`, signal);
   const info = body?.data?.info;
   return Array.isArray(info) ? info : [];
 }
 
 async function getPlaylistDetail(playlistId, _cookie, env) {
-  const { meta, total, fallback } = await fetchMeta(playlistId);
+  const signal = AbortSignal.timeout(30000);
+  const { meta, total, fallback } = await fetchMeta(playlistId, signal);
   const pageCount = Math.ceil(total / PAGE_SIZE);
   const pages = Math.min(maxPages(env), Math.max(1, pageCount));
 
   let raw = [];
   try {
     for (let page = 1; page <= pages; page++) {
-      const info = await fetchSongPage(playlistId, page);
+      const info = await fetchSongPage(playlistId, page, signal);
       if (!info.length) break;
       raw.push(...info);
     }
@@ -176,7 +178,7 @@ const BITRATE = { low: 128000, medium: 192000, high: 320000, lossless: 320000 };
 
 async function fetchSongInfo(hash) {
   const url = `${API_ORIGIN}/app/i/getSongInfo.php?cmd=playInfo&hash=${encodeURIComponent(hash)}`;
-  const response = await fetch(url, { headers: headers(), redirect: 'follow' });
+  const response = await upstreamRequest(url, { headers: headers(), redirect: 'follow' });
   if (!response.ok) return null;
   const text = await response.text();
   try {

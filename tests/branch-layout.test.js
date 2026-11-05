@@ -37,11 +37,11 @@ test('website publishing is restricted to the Cloudflare branch', () => {
   assert.ok(push, 'Website workflow defines a push trigger');
   const branches = push[1].match(/^\s+branches:\s*\[([^\]]+)\]/m);
   assert.ok(branches, 'Website push trigger explicitly selects branches');
-  assert.deepEqual(branches[1].split(',').map(value => value.trim().replace(/^['"]|['"]$/g, '')), ['codex/cloudflare']);
+  assert.deepEqual(branches[1].split(',').map(value => value.trim().replace(/^['"]|['"]$/g, '')), ['master']);
   const deploy = workflow.match(/^  deploy:\s*\r?\n([\s\S]*?)(?=^  [\w-]+:|$(?![\s\S]))/m);
   assert.ok(deploy, 'Website workflow defines a deployment job');
   const condition = deploy[1].match(/^\s+if:\s*(.+)$/m);
   assert.ok(condition, 'Deployment has an explicit branch condition');
-  assert.match(condition[1], /github\.ref\s*==\s*['"]refs\/heads\/codex\/cloudflare['"]/);
+  assert.match(condition[1], /github\.ref\s*==\s*['"]refs\/heads\/master['"]/);
   assert.match(condition[1], /github\.event_name\s*!=\s*['"]pull_request['"]/);
 });

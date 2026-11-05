@@ -14,6 +14,8 @@
 // wapi.kuwo.cn 的登录接口不需要 Web 端的 Secret 签名；www.kuwo.cn 的 /api/* 需要，
 // 但图形验证码与短信发送这两个端点实测直接可用（2026-10）。
 
+import { upstreamRequest } from './request.js';
+
 const WWW_ORIGIN = 'https://www.kuwo.cn';
 const WAPI_ORIGIN = 'https://wapi.kuwo.cn';
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -66,7 +68,7 @@ async function readJson(response) {
 
 /** 取一张图形验证码：img 可直接给 <img>，token 与 cookie 必须原样带回登录请求。 */
 async function captcha() {
-  const response = await fetch(`${WWW_ORIGIN}/api/common/captcha/getcode`, { headers: headers() });
+  const response = await upstreamRequest(`${WWW_ORIGIN}/api/common/captcha/getcode`, { headers: headers() });
   if (!response.ok) throw new KuwoLoginError(`酷我验证码接口返回 ${response.status}`);
   const body = await readJson(response);
   const img = body?.data?.img;
@@ -120,7 +122,7 @@ function profileOf(cookies) {
 }
 
 async function postLogin(path, payload, cookie) {
-  const response = await fetch(withQuery(path), {
+  const response = await upstreamRequest(withQuery(path), {
     method: 'POST',
     headers: headers(cookie, { 'content-type': 'application/json' }),
     body: JSON.stringify(payload),

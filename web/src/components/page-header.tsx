@@ -35,7 +35,7 @@ export function SectionHeader({ title, action }: { title: string; action?: React
 
 export function EmptyState({ text, action }: { text: string; action?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-border px-5 py-6 text-[13px] text-muted-foreground">
+    <div role="status" className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-border px-5 py-6 text-[13px] text-muted-foreground">
       {text}
       {action}
     </div>

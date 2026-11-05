@@ -6,6 +6,8 @@ import type { Platform, QualityId, ThemeName } from './types';
 export const STORAGE_KEYS = {
   token: 'token',
   qqToken: 'qqToken',
+  kugouToken: 'kugouToken',
+  kuwoToken: 'kuwoToken',
   theme: 'theme',
   generatorPlatform: 'generatorPlatform',
   personalPlatformTab: 'personalPlatformTab',
@@ -28,16 +30,21 @@ function safeRemove(key: string): void {
   try { localStorage.removeItem(key); } catch { /* 忽略 */ }
 }
 
+const TOKEN_KEYS: Record<Platform, string> = {
+  netease: STORAGE_KEYS.token, qq: STORAGE_KEYS.qqToken,
+  kugou: STORAGE_KEYS.kugouToken, kuwo: STORAGE_KEYS.kuwoToken,
+};
+
 export function readToken(platform: Platform): string {
-  return safeRead(platform === 'qq' ? STORAGE_KEYS.qqToken : STORAGE_KEYS.token);
+  return safeRead(TOKEN_KEYS[platform]);
 }
 
 export function writeToken(platform: Platform, token: string): void {
-  safeWrite(platform === 'qq' ? STORAGE_KEYS.qqToken : STORAGE_KEYS.token, token);
+  safeWrite(TOKEN_KEYS[platform], token);
 }
 
 export function clearToken(platform: Platform): void {
-  safeRemove(platform === 'qq' ? STORAGE_KEYS.qqToken : STORAGE_KEYS.token);
+  safeRemove(TOKEN_KEYS[platform]);
 }
 
 export type { ThemeName };

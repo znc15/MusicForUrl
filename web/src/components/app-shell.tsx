@@ -4,9 +4,7 @@ import { Sidebar } from '@/components/sidebar';
 import { Topbar } from '@/components/topbar';
 import { PageTransition } from '@/motion/primitives';
 import { Skeleton } from '@/components/ui/input';
-import { useAuth } from '@/stores/auth';
 import { usePlayer } from '@/stores/player';
-import { useTheme } from '@/stores/theme';
 import { useUi } from '@/stores/ui';
 import { routeFromPath } from '@/lib/routes';
 
@@ -39,14 +37,9 @@ function PlayerSlot() {
 export function AppShell() {
   const location = useLocation();
   const view = routeFromPath(location.pathname);
-  const applyTheme = useTheme(state => state.apply);
-  const refreshAll = useAuth(state => state.refreshAll);
   const setSidebar = useUi(state => state.setSidebar);
   const loginOpen = useUi(state => state.loginOpen);
 
-  // 主题与账号状态只在挂载时同步一次，避免每次路由切换都打一次 /auth/status
-  React.useEffect(() => { applyTheme(); }, [applyTheme]);
-  React.useEffect(() => { void refreshAll(); }, [refreshAll]);
   // 窄屏没有展开侧栏的余地，进入时强制收起，避免从桌面缩小窗口后留下半截侧栏
   React.useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
@@ -58,10 +51,10 @@ export function AppShell() {
   }, [setSidebar]);
 
   return (
-    <div className="flex h-full flex-col md:flex-row">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">
       <Sidebar />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Topbar />
 
         <main className="min-h-0 flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-7">

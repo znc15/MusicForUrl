@@ -21,6 +21,6 @@ Stream 的视频存储容量按 $5 / 1,000 分钟·月购买，播放分发 $1 /
 
 ## 本项目建议
 
-在 `codex/cloudflare` 继续维护 Workers Static Assets + D1 与私有 R2 热缓存，静态官网独立由 GitHub Pages 发布。需要 Node.js、SQLite、无损或 FFmpeg 的现有部署，使用 `codex/nodejs-frozen` 的[原始文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
+在 `master` 继续维护 Workers Static Assets + D1 与私有 R2 热缓存，静态官网独立由 GitHub Pages 发布。需要 Node.js、SQLite、无损或 FFmpeg 的现有部署，使用 `node` 的[原始文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
 
 音频响应设置 `private, no-store`，不开放 R2 公共域名；每次媒体读取均检查账号与歌曲权限。缓存目的为短期减少重复回源，不能扩大音乐平台授予的播放权利。稳定性与速度由真实线路测量决定，优选 DNS 和 Smart Placement 不应替代播放链路验证。

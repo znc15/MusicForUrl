@@ -91,13 +91,15 @@ export function VolumeControl({ className }: { className?: string }) {
         onKeyDown={onKeyDown}
         onPointerDown={event => {
           event.preventDefault();
+          event.currentTarget.focus();
           setDragging(true);
           setVolume(volumeAt(event.clientX));
         }}
-        className="group relative flex h-1 w-full min-w-20 flex-1 cursor-pointer touch-none items-center rounded-full bg-muted"
+        className="group relative flex h-6 w-full min-w-20 flex-1 cursor-pointer touch-none items-center rounded-full"
       >
+        <span aria-hidden="true" className="absolute inset-x-0 h-1 rounded-full bg-muted" />
         <span
-          className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-primary to-[color-mix(in_srgb,var(--primary)_60%,white)]"
+          className="absolute left-0 h-1 rounded-full bg-gradient-to-r from-primary to-[color-mix(in_srgb,var(--primary)_60%,white)]"
           style={{ width: `${percent}%` }}
         />
         <span

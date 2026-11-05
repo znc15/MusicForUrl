@@ -12,6 +12,7 @@
 // 免费额度约束：读歌单最多 2 次子请求（引导 + 接口），解析音源 1 次。
 
 import { captcha, checkLoginStatus, loginByPassword, loginBySms, sendSms } from './kuwo-login.js';
+import { upstreamRequest } from './request.js';
 
 const WEB_ORIGIN = 'https://www.kuwo.cn';
 const ANTI_ORIGIN = 'http://antiserver.kuwo.cn';
@@ -58,7 +59,8 @@ async function session(env) {
   const configured = String(env?.KUWO_COOKIE || '').trim();
   if (configured) return configured;
 
-  const response = await fetch(`${WEB_ORIGIN}/`, { headers: headers({ accept: 'text/html' }), redirect: 'follow' });
+  const response = await upstreamRequest(`${WEB_ORIGIN}/`,
+    { headers: headers({ accept: 'text/html' }), redirect: 'follow' }, { headersOnly: true });
   const pairs = cookiePairs(setCookies(response));
   const name = [...pairs.keys()].find((key) => TOKEN_COOKIE.test(key));
   if (!name) return '';
@@ -79,7 +81,7 @@ async function playlistApi(env, playlistId, cookie) {
   const query = new URLSearchParams({
     pid: String(playlistId), pn: '1', rn: '1000', httpsStatus: '1',
   });
-  const response = await fetch(`${WEB_ORIGIN}/api/www/playlist/playListInfo?${query}`, {
+  const response = await upstreamRequest(`${WEB_ORIGIN}/api/www/playlist/playListInfo?${query}`, {
     headers: headers({
       referer: `${WEB_ORIGIN}/playlist_detail/${playlistId}`,
       ...(cookie ? { cookie, csrf: csrfOf(cookie) } : {}),
@@ -146,7 +148,7 @@ async function convertUrl(songId, br) {
   const query = new URLSearchParams({
     type: 'convert_url', rid: `MUSIC_${songId}`, format: 'mp3', br, response: 'url',
   });
-  const response = await fetch(`${ANTI_ORIGIN}/anti.s?${query}`, { headers: headers() });
+  const response = await upstreamRequest(`${ANTI_ORIGIN}/anti.s?${query}`, { headers: headers() }, { maxBytes: 16384 });
   if (!response.ok) return '';
   const text = (await response.text()).trim();
   return /^https?:\/\//i.test(text) ? text : '';

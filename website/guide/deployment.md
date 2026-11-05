@@ -1,8 +1,8 @@
 # Cloudflare 部署
 
-`codex/cloudflare` 是后续维护入口，推荐使用 Workers Static Assets + D1，按需启用私有 R2。已有 Pages 项目也可以使用下方的 Functions 兼容入口。
+`master` 是后续维护入口，推荐使用 Workers Static Assets + D1，按需启用私有 R2。已有 Pages 项目也可以使用下方的 Functions 兼容入口。
 
-Node.js / Docker 版本保存在 `codex/nodejs-frozen`。其运行命令、SQLite 与 FFmpeg 配置见[冻结基线 f3830c4 的原始文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
+Node.js / Docker 版本保存在 `node`。其运行命令、SQLite 与 FFmpeg 配置见[冻结基线 f3830c4 的原始文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
 
 ## 安装依赖与本地运行
 
@@ -21,7 +21,7 @@ npm --prefix cloudflare run db:local
 npm run dev
 ```
 
-根目录提供统一入口：`npm test` 运行播放器基础模块与 Worker 回归测试，`npm run check` 检查前端类型，`npm run build` 输出 `web/dist`。根目录无需单独安装依赖。
+根目录提供统一入口：`npm test` 运行基础模块、Worker、数据库迁移与前端状态机回归，`npm run check` 检查前端类型，`npm run build` 输出 `web/dist`。根目录无需单独安装依赖。
 
 ## 推荐：Workers + D1 + R2
 
@@ -45,7 +45,17 @@ npm run build:assets
 npx wrangler deploy --secrets-file .dev.vars.production
 ```
 
-上面的部署命令会同时上传 Secret。`AUDIO_CACHE_ENABLED=true` 启用缓存；没有 R2 时删除绑定并设为 `false`。后续代码更新执行 `npm run deploy`，会自动构建前端并保留已有 Secret。升级前备份 D1，并按 [Cloudflare 文档的升级顺序](../generated/cloudflare#播放历史与保留) 核对适用迁移，再发布。
+上面的部署命令会同时上传 Secret。`AUDIO_CACHE_ENABLED=true` 启用缓存；没有 R2 时删除绑定并设为 `false`。后续代码更新执行 `npm run deploy`，会自动构建前端并保留已有 Secret。
+
+### 旧数据库升级
+
+1. 保存 D1 数据库导出或 Time Travel bookmark。
+2. 在 `cloudflare/` 运行 `npm run db:migrate -- --remote`，完成四平台约束和历史表的统一升级。
+3. 命令成功后再发布 Worker，并检查登录、收藏和历史。重复迁移会返回 `Already applied`。
+
+原 `db:remote`、backfill、stats、qr npm 命令均调用同一版本化入口；已有账号和关联数据保留。详细回填与回滚方式见 [数据库升级说明](../generated/cloudflare#播放历史与保留)。
+
+首次上线本次认证补丁时，建议安排 QQ、酷狗和酷我的已有会话重新登录，以清理旧 Cookie 入口曾签发的会话；执行前备份，保留账号及收藏、历史数据。
 
 ## Pages Functions
 

@@ -14,7 +14,8 @@ import {
 import { PLATFORMS, capabilityMatrix, guestUser, platformFromPath } from './platforms.js';
 import { bumpParsedSongs, readSiteStats, refreshSiteStats } from './stats.js';
 import { recordPlayEvent, recordRequestEvent } from './telemetry.js';
-import { degradeMode, secondsUntilUtcMidnight } from './degrade.js';
+import { degradeMode } from './degrade.js';
+import { admitControl, rateLimited, retryAfter } from './request-policy.js';
 
 const QR_TTL_MS = 3 * 60 * 1000;
 const MAX_REQUEST_BODY_BYTES = 65536;
@@ -29,8 +30,8 @@ function json(body, status = 200, extraHeaders = {}) {
   });
 }
 
-function fail(message, status = 400) {
-  return json({ success: false, message }, status);
+function fail(message, status = 400, headers = {}) {
+  return json({ success: false, message }, status, headers);
 }
 
 function viewUser(user) {
@@ -77,18 +78,6 @@ async function bodyJson(request) {
   }
 }
 
-async function rateLimited(env, request, scope, maxHits) {
-  const ip = request.headers.get('cf-connecting-ip') || 'local';
-  const key = await sha256Hex(`${scope}:${ip}`);
-  const bucket = Math.floor(Date.now() / 60000);
-  const result = await env.DB.prepare(`
-    INSERT INTO rate_limits (scope, key_hash, bucket, hits) VALUES (?, ?, ?, 1)
-    ON CONFLICT (scope, key_hash, bucket) DO UPDATE SET hits = hits + 1
-    RETURNING hits
-  `).bind(scope, key, bucket).first();
-  return Number(result?.hits || 0) > maxHits;
-}
-
 async function requireUser(env, request, platform, url) {
   return getSessionUser(env, request, platform, url);
 }
@@ -121,8 +110,8 @@ async function saveLogin(env, platform, profile, cookie, code) {
   });
 }
 
-async function accountStatus(platform, cookie) {
-  if (platform === 'qq') return qqmusic.checkLoginStatus(cookie);
+async function accountStatus(platform, cookie, expectedUin) {
+  if (platform === 'qq') return qqmusic.checkLoginStatus(cookie, expectedUin);
   if (platform === 'kugou' || platform === 'kuwo') return adapter(platform).checkLoginStatus(cookie);
   return netease.checkLoginStatus(cookie);
 }
@@ -138,6 +127,11 @@ async function authRoute(request, env, platform, path, url) {
   }
   const upstream = adapter(platform);
 
+  // 仅网易云提供经上游认证的手填 Cookie 登录。其他平台从各自真实登录流程建会话。
+  if (method === 'POST' && path === '/login/cookie' && platform !== 'netease') {
+    return fail('请使用该平台提供的扫码、密码或短信登录方式', 405);
+  }
+
   if (method === 'GET' && path === '/status') {
     const user = await getSessionUser(env, request, platform, url);
     return json({ success: true, data: user
@@ -152,7 +146,7 @@ async function authRoute(request, env, platform, path, url) {
 
   const isQrPoll = method === 'GET' && path === '/qrcode/check';
   if (await rateLimited(env, request, `${platform}:${isQrPoll ? 'qr-poll' : 'auth'}`, isQrPoll ? 45 : 12)) {
-    return fail('登录请求过于频繁，请稍后再试', 429);
+    return fail('登录请求过于频繁，请稍后再试', 429, { 'retry-after': String(retryAfter()) });
   }
 
   if (method === 'GET' && path === '/qrcode') {
@@ -189,13 +183,13 @@ async function authRoute(request, env, platform, path, url) {
       if (!cookie) return fail('登录成功但未取得会话 Cookie');
       let status;
       if (platform === 'qq') {
-        try {
-          status = await accountStatus(platform, cookie);
-        } catch (_) {
-          status = { logged: false };
+        // 身份来自服务器持有的二维码确认结果；公开用户资料只用于补充展示。
+        const userId = String(result.uin || '');
+        if (!/^\d{1,20}$/.test(userId) || qqmusic.extractUin(cookie) !== userId || !qqmusic.extractMusicKey(cookie)) {
+          return fail('QQ 音乐授权未完成，请重新扫码', 401);
         }
-        const userId = status.userId || result.uin || qqmusic.extractUin(cookie);
-        if (!userId) return fail('登录状态异常');
+        status = await accountStatus(platform, cookie, userId);
+        if (status.userId && String(status.userId) !== userId) return fail('登录身份不一致，请重新扫码', 401);
         status = {
           ...status,
           userId,
@@ -315,12 +309,9 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
   const user = sessionUser || (meta.guestPlayback ? guestUser(platform) : null);
   if (!user) return fail('请先登录', 401);
 
-  // 额度耗尽时只拒新会话，已签发的播放链接不受影响
-  const shed = (routePath) => ['/parse', '/url', '/generate'].includes(routePath)
-    && degradeMode(env) === 'shed';
-  if (shed(path)) {
-    return json({ success: false, message: '今日额度已用完，请在 00:00 UTC 后重试' }, 503,
-      { 'retry-after': String(secondsUntilUtcMidnight()) });
+  if ((request.method === 'GET' && ['/parse', '/url'].includes(path)) ||
+    (request.method === 'POST' && path === '/generate')) {
+    await admitControl(env, request, platform);
   }
 
   if (request.method === 'GET' && path === '/user') {
@@ -334,9 +325,6 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
   }
 
   if (request.method === 'GET' && path === '/parse') {
-    if (await rateLimited(env, request, `${platform}:parse`, 30)) {
-      return fail('解析请求过于频繁', 429);
-    }
     const playlistId = parsePlaylistId(url.searchParams.get('url'), platform);
     if (!playlistId) return fail('无效的歌单链接或 ID');
     const playlist = await getPlaylist(env, user, playlistId, ctx);
@@ -359,9 +347,6 @@ async function playlistRoute(request, env, ctx, platform, path, url) {
 
   // 一次请求完成解析 → 取歌单 → 签发令牌 → 返回链接，替代前端连续调用 /parse 与 /url
   if (request.method === 'POST' && path === '/generate') {
-    if (await rateLimited(env, request, `${platform}:parse`, 30)) {
-      return fail('解析请求过于频繁', 429);
-    }
     const body = await bodyJson(request);
     const playlistId = parsePlaylistId(body.url, platform);
     if (!playlistId) return fail('无效的歌单链接或 ID');
@@ -616,7 +601,9 @@ export default {
     } catch (error) {
       recordRequestEvent(env, request, url, error.status || 500, Date.now() - startedAt);
       if (error instanceof RequestBodyTooLargeError) return fail('请求体不能超过 64 KiB', 413);
-      if (Number.isInteger(error.status) && error.status >= 400 && error.status <= 599) return fail(error.message, error.status);
+      if (Number.isInteger(error.status) && error.status >= 400 && error.status <= 599) {
+        return fail(error.message, error.status, error.retryAfter ? { 'retry-after': String(error.retryAfter) } : {});
+      }
       console.error('[API]', error);
       return fail('请求处理失败，请稍后重试', 500);
     }

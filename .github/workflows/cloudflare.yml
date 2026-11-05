@@ -2,9 +2,9 @@ name: Cloudflare checks
 
 on:
   push:
-    branches: [codex/cloudflare]
+    branches: [master]
   pull_request:
-    branches: [codex/cloudflare]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -25,4 +25,5 @@ jobs:
       - run: npm ci --prefix web
       - run: npm ci --prefix cloudflare
       - run: npm test
+      - run: npm --prefix cloudflare run test:migrations:local
       - run: npm run build:worker

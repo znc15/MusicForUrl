@@ -4,7 +4,7 @@ import { api } from '@/lib/api';
 import { ACCOUNT_PLATFORMS, platformLabel } from '@/lib/platforms';
 import type { AccountUser, Platform } from '@/lib/types';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input, Label, Textarea } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Segmented } from '@/motion/primitives';
@@ -419,17 +419,13 @@ export function LoginDialog() {
       Record<string, (token: string, user: AccountUser) => void>,
     [handleSuccess],
   );
-  // 游客平台没有登录流程：弹窗里只展示能登录的平台，其余平台走能力说明
   const active: Platform = ACCOUNT_PLATFORMS.some(item => item.id === platform) ? platform : 'netease';
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) closeLogin(); }}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>登录音乐账号</DialogTitle>
-          <DialogDescription>
-            每个平台可以记住多个账号，同一时间只有一个生效。个人数据（歌单、收藏、播放记录）严格按账号区分。
-          </DialogDescription>
         </DialogHeader>
 
         <Segmented
@@ -466,10 +462,6 @@ export function LoginDialog() {
           <QrPanel platform={active} onSuccess={handlers[active]} />
         )}
 
-        <p className="mt-4 border-t border-border pt-3 text-[12px] text-muted-foreground">
-          酷狗支持扫码登录，酷我支持账号密码 / 手机短信登录；登录只用于账号身份，
-          歌单与音源仍走公开接口，暂不提供个人歌单、收藏与会员音源。
-        </p>
       </DialogContent>
     </Dialog>
   );

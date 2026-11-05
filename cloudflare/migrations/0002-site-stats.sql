@@ -1,3 +1,4 @@
+-- 历史迁移，仅用于旧版本追溯与回归夹具。当前安装/升级统一执行 npm run db:migrate -- --local 或 --remote。
 -- 0002 — 站点统计与播放时长
 --
 -- 必须在部署带 /api/stats 的 Worker 之前执行，否则 recordPlayback 会因为缺少

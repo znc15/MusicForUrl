@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ChevronLeft, ChevronRight, Link2, Trash2 } from 'lucide-react';
+import { accountQueryKey, queryClient, removeCachedFavorite } from '@/lib/query-client';
 import { api } from '@/lib/api';
 import { PLATFORMS, platformInfo } from '@/lib/platforms';
 import type { FavoriteItem, HistoryItem, Paged, PlaylistSummary, TopSong } from '@/lib/types';
@@ -24,22 +25,30 @@ const LIBRARY_PLATFORMS = PLATFORMS.filter(item => item.library);
 
 function usePagedList<T>(
   queryKey: unknown[],
-  fetcher: (offset: number, limit: number) => Promise<Paged<T>>,
+  fetcher: (offset: number, limit: number, signal: AbortSignal) => Promise<Paged<T>>,
   enabled: boolean,
 ) {
-  const [page, setPage] = React.useState(0);
+  const scope = JSON.stringify(queryKey);
+  const [pagination, setPagination] = React.useState({ scope, page: 0 });
+  const page = pagination.scope === scope ? pagination.page : 0;
+  const setPage = (next: number) => setPagination({ scope, page: next });
+  React.useEffect(() => { setPagination({ scope, page: 0 }); }, [scope]);
   const query = useQuery({
     queryKey: [...queryKey, page],
-    queryFn: () => fetcher(page * PAGE_SIZE, PAGE_SIZE),
+    queryFn: ({ signal }) => fetcher(page * PAGE_SIZE, PAGE_SIZE, signal),
     enabled,
-    placeholderData: previous => previous,
   });
+  const pageCount = Math.max(1, Math.ceil((query.data?.total ?? 0) / PAGE_SIZE));
+  React.useEffect(() => {
+    if (query.data && page >= pageCount) setPagination({ scope, page: pageCount - 1 });
+  }, [query.data, page, pageCount, scope]);
   return {
+    error: query.error, retry: query.refetch,
     items: query.data?.data ?? [],
     loading: query.isLoading,
     page,
     setPage,
-    pageCount: Math.max(1, Math.ceil((query.data?.total ?? 0) / PAGE_SIZE)),
+    pageCount,
   };
 }
 
@@ -78,28 +87,33 @@ export function UserView() {
   const openLogin = useUi(state => state.openLogin);
   const openPlaylist = usePlayer(state => state.open);
   const navigate = useNavigate();
+  const token = useAuth(state => state.tokens[platform]);
+  const [tab, setTab] = React.useState('playlists');
+  const [removing, setRemoving] = React.useState('');
   const user = users[platform];
+  const userId = user?.userId ?? '';
+  const options = { token };
   const loggedIn = !!user;
 
 
   const playlists = usePagedList<PlaylistSummary>(
-    ['playlists', platform], (offset, limit) => api.userPlaylists(platform, offset, limit), loggedIn,
+    [...accountQueryKey(platform, userId, 'playlists')], (offset, limit, signal) => api.userPlaylists(platform, offset, limit, { ...options, signal }), loggedIn && tab === 'playlists',
   );
   const favorites = usePagedList<FavoriteItem>(
-    ['favorites', platform], (offset, limit) => api.favorites(platform, offset, limit), loggedIn,
+    [...accountQueryKey(platform, userId, 'favorites')], (offset, limit, signal) => api.favorites(platform, offset, limit, { ...options, signal }), loggedIn && tab === 'favorites',
   );
   const recent = usePagedList<HistoryItem>(
-    ['recent', platform], (offset, limit) => api.recent(platform, offset, limit), loggedIn,
+    [...accountQueryKey(platform, userId, 'recent')], (offset, limit, signal) => api.recent(platform, offset, limit, { ...options, signal }), loggedIn && tab === 'recent',
   );
   const top = useQuery({
-    queryKey: ['top', platform],
-    queryFn: () => api.top(platform, 20),
-    enabled: loggedIn,
+    queryKey: accountQueryKey(platform, userId, 'top'),
+    queryFn: ({ signal }) => api.top(platform, 20, { ...options, signal }),
+    enabled: loggedIn && tab === 'top',
   });
 
   async function play(playlistId: string) {
-    await openPlaylist(platform, playlistId);
-    navigate('/preview');
+    if (await openPlaylist(platform, playlistId)) navigate('/preview');
+    else if (usePlayer.getState().status === 'error') toast.error(usePlayer.getState().message);
   }
 
   return (
@@ -107,7 +121,6 @@ export function UserView() {
       <PageHeader
         eyebrow="My music"
         title="我的音乐"
-        description="浏览歌单、收藏与播放记录。点击封面即可播放。"
         actions={(
           <Segmented
             ariaLabel="音乐平台"
@@ -128,10 +141,8 @@ export function UserView() {
             onError={event => { event.currentTarget.src = '/placeholder.svg'; }}
           />
           <p className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">
-            以下数据都属于
             <strong className="mx-1 font-medium text-foreground">{user.nickname || '当前账号'}</strong>
-            （{platformInfo(platform).label} · ID {user.userId}）。
-            换账号后这里会整体切换成那个账号的数据，互不覆盖。
+            {platformInfo(platform).label} · ID {user.userId}
           </p>
           <Button variant="ghost" size="sm" asChild>
             <a href="/accounts">管理账号</a>
@@ -145,7 +156,7 @@ export function UserView() {
       )}
 
       {user && (
-        <Tabs defaultValue="playlists">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="w-fit">
             <TabsTrigger value="playlists">我的歌单</TabsTrigger>
             <TabsTrigger value="favorites">我的收藏</TabsTrigger>
@@ -154,7 +165,7 @@ export function UserView() {
           </TabsList>
 
           <TabsContent value="playlists">
-            {playlists.loading ? <GridSkeleton /> : !playlists.items.length ? <EmptyState text="这个账号下没有歌单" /> : (
+            {playlists.error ? <EmptyState text={playlists.error.message || '加载失败，请重试'} action={<Button variant="outline" size="sm" onClick={() => void playlists.retry()}>重试</Button>} /> : playlists.loading ? <GridSkeleton /> : !playlists.items.length ? <EmptyState text="这个账号下没有歌单" /> : (
               <ListReveal className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
                 {playlists.items.map(item => (
                   <ListItem key={item.id}>
@@ -173,7 +184,7 @@ export function UserView() {
           </TabsContent>
 
           <TabsContent value="favorites">
-            {favorites.loading ? <GridSkeleton /> : !favorites.items.length ? <EmptyState text="还没有收藏歌单" /> : (
+            {favorites.error ? <EmptyState text={favorites.error.message || '加载失败，请重试'} action={<Button variant="outline" size="sm" onClick={() => void favorites.retry()}>重试</Button>} /> : favorites.loading ? <GridSkeleton /> : !favorites.items.length ? <EmptyState text="还没有收藏歌单" /> : (
               <ListReveal className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
                 {favorites.items.map(item => (
                   <ListItem key={item.playlistId}>
@@ -193,13 +204,20 @@ export function UserView() {
                           variant="ghost"
                           size="sm"
                           aria-label="取消收藏"
+                          disabled={removing === item.playlistId}
                           onClick={async () => {
+                            setRemoving(item.playlistId);
                             try {
-                              await api.removeFavorite(platform, item.playlistId);
+                              await api.removeFavorite(platform, item.playlistId, token);
+                              if (useAuth.getState().tokens[platform] !== token) return;
+                              const key = accountQueryKey(platform, userId, 'favorites');
+                              removeCachedFavorite(platform, userId, item.playlistId);
+                              await queryClient.invalidateQueries({ queryKey: key });
                               toast.success('已取消收藏');
-                              favorites.setPage(favorites.page);
                             } catch (error) {
                               toast.error(error instanceof Error ? error.message : '操作失败');
+                            } finally {
+                              setRemoving('');
                             }
                           }}
                         >
@@ -215,7 +233,7 @@ export function UserView() {
           </TabsContent>
 
           <TabsContent value="recent">
-            {recent.loading ? <GridSkeleton /> : !recent.items.length ? <EmptyState text="最近 30 天没有播放记录" /> : (
+            {recent.error ? <EmptyState text={recent.error.message || '加载失败，请重试'} action={<Button variant="outline" size="sm" onClick={() => void recent.retry()}>重试</Button>} /> : recent.loading ? <GridSkeleton /> : !recent.items.length ? <EmptyState text="最近 30 天没有播放记录" /> : (
               <ListReveal className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
                 {recent.items.map(item => (
                   <ListItem key={item.playlistId}>
@@ -234,7 +252,7 @@ export function UserView() {
           </TabsContent>
 
           <TabsContent value="top">
-            {top.isLoading ? <GridSkeleton /> : !top.data?.length ? <EmptyState text="还没有足够的播放记录" /> : (
+            {top.error ? <EmptyState text={top.error.message || '加载失败，请重试'} action={<Button variant="outline" size="sm" onClick={() => void top.refetch()}>重试</Button>} /> : top.isLoading ? <GridSkeleton /> : !top.data?.length ? <EmptyState text="还没有足够的播放记录" /> : (
               <ol className="flex flex-col gap-1.5">
                 {top.data.map((song: TopSong, index) => (
                   <li

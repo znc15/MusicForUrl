@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ListMusic, Pause, Play, SkipBack, SkipForward, X } from 'lucide-react';
+import { ListMusic, Pause, Play, SkipBack, SkipForward, SlidersHorizontal, X } from 'lucide-react';
 import { cn, formatBitrate, formatDuration } from '@/lib/utils';
 import type { QualityOption } from '@/lib/types';
 import { Badge } from '@/components/ui/card';
@@ -21,6 +21,7 @@ export function MiniPlayer() {
   const errorCode = usePlayer(state => state.errorCode);
   const quality = usePlayer(state => state.quality);
   const autoplay = usePlayer(state => state.autoplay);
+  const generation = usePlayer(state => state.generation);
   const next = usePlayer(state => state.next);
   const prev = usePlayer(state => state.prev);
   const playIndex = usePlayer(state => state.playIndex);
@@ -34,6 +35,7 @@ export function MiniPlayer() {
   const muted = useVolume(state => state.muted);
   const { data: capabilities } = useCapabilities();
 
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [queueOpen, setQueueOpen] = React.useState(false);
   const [progress, setProgress] = React.useState({ time: 0, duration: 0 });
   const positionRef = React.useRef(0);
@@ -41,24 +43,33 @@ export function MiniPlayer() {
   const trackRef = React.useRef('');
 
   const track = playlist?.tracks[index] ?? null;
-  const trackKey = `${playlist?.id ?? ''}:${index}`;
+  const trackKey = `${playlist?.platform ?? ''}:${playlist?.id ?? ''}:${index}`;
 
   React.useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !source) return;
+    if (!audio) return;
+    if (!source) { audio.pause(); audio.removeAttribute('src'); audio.load(); return; }
     // 同一首歌重新解析（切换音质、出错重试）时保留进度，切歌则从头播放
     const sameTrack = trackRef.current === trackKey;
     trackRef.current = trackKey;
-    retriedRef.current = false;
+    if (!sameTrack) {
+      retriedRef.current = false;
+      positionRef.current = 0;
+      setProgress({ time: 0, duration: 0 });
+    }
     audio.src = source.mediaUrl;
-    if (sameTrack) audio.currentTime = positionRef.current;
+    const restorePosition = () => { if (sameTrack) audio.currentTime = positionRef.current; };
+    audio.addEventListener('loadedmetadata', restorePosition, { once: true });
     if (autoplay) {
       void audio.play().catch(() => {
         // 浏览器可能拦截自动播放，此时交给用户手动点击
-        usePlayer.setState({ status: 'paused' });
+        if (usePlayer.getState().generation === generation && usePlayer.getState().source === source) {
+          usePlayer.setState({ status: 'paused' });
+        }
       });
     }
-  }, [source?.mediaUrl, autoplay, trackKey]);
+    return () => { audio.removeEventListener('loadedmetadata', restorePosition); };
+  }, [source, autoplay, trackKey, generation]);
 
   // 音量是全局的：播放器重新挂载、切歌、切路由之后都要回到同一档
   React.useEffect(() => {
@@ -72,44 +83,39 @@ export function MiniPlayer() {
     && !!playlist && index + 1 < playlist.tracks.length;
 
   if (!playlist || !track) return null;
-  const percent = progress.duration > 0 ? (progress.time / progress.duration) * 100 : 0;
 
   function handleError() {
+    if (!source || usePlayer.getState().generation !== generation) return;
     if (!retriedRef.current) {
       retriedRef.current = true;
       void retry();
       return;
     }
-    fail('无法播放这首歌曲，可能受版权、VIP 或地区限制');
+    fail('无法播放这首歌曲，请重试或切换音质', generation);
   }
 
-  function seek(event: React.MouseEvent<HTMLDivElement>) {
-    const audio = audioRef.current;
-    if (!audio || !progress.duration) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    audio.currentTime = ratio * progress.duration;
-  }
 
   return (
-    <div className="shrink-0 border-t border-border bg-card shadow-[0_-14px_34px_-26px_rgb(20_70_105/60%)]">
+    <div className="max-h-[50dvh] shrink-0 overflow-y-auto overscroll-contain border-t border-border bg-card shadow-[0_-14px_34px_-26px_rgb(20_70_105/60%)]">
       <audio
+        key={generation}
         ref={audioRef}
-        onPlay={markPlaying}
-        onPause={markPaused}
-        onEnded={() => void next()}
+        onPlay={() => markPlaying(generation)}
+        onPause={() => markPaused(generation)}
+        onEnded={() => { if (usePlayer.getState().generation === generation) void next(); }}
         onError={handleError}
         onTimeUpdate={event => {
+          if (!source || usePlayer.getState().generation !== generation) return;
           positionRef.current = event.currentTarget.currentTime;
-          setProgress({ time: event.currentTarget.currentTime, duration: event.currentTarget.duration || 0 });
+          setProgress({ time: event.currentTarget.currentTime, duration: Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0 });
         }}
         preload="metadata"
       />
 
-      <div className="flex items-center gap-4 px-4 py-3 md:px-6">
+      <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 py-3 sm:flex sm:flex-wrap md:px-6">
         <CoverArt src={track.cover || playlist.cover} seed={track.id} className="size-11 shrink-0 rounded-lg" />
 
-        <div className="min-w-0 w-[9rem] shrink-0 md:w-[13rem]">
+        <div className="min-w-0 flex-1 sm:max-w-[13rem]">
           <p className="truncate text-[13.5px] font-medium">{track.name}</p>
           <p className="truncate text-[11.5px] text-muted-foreground">
             {track.artist || playlist.name}
@@ -117,7 +123,7 @@ export function MiniPlayer() {
           </p>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="col-span-3 row-start-2 flex shrink-0 items-center justify-self-center gap-1.5 sm:order-none">
           <button
             type="button"
             onClick={() => void prev()}
@@ -130,6 +136,7 @@ export function MiniPlayer() {
           <button
             type="button"
             aria-label={paused ? '播放' : '暂停'}
+            disabled={!source || status === 'loading'}
             onClick={() => {
               const audio = audioRef.current;
               if (!audio) return;
@@ -151,27 +158,29 @@ export function MiniPlayer() {
           </button>
         </div>
 
-        <div className="hidden min-w-0 flex-1 items-center gap-3 sm:flex">
+        <div className="col-span-3 row-start-3 flex min-w-0 basis-full items-center gap-3 sm:order-last lg:order-none lg:basis-auto lg:flex-1">
           <span className="text-[11.5px] tabular-nums text-muted-foreground">{formatDuration(progress.time)}</span>
-          <div
-            role="slider"
-            tabIndex={0}
+          <input
+            type="range"
             aria-label="播放进度"
-            aria-valuemin={0}
-            aria-valuemax={Math.round(progress.duration)}
-            aria-valuenow={Math.round(progress.time)}
-            onClick={seek}
-            className="group relative h-1 flex-1 cursor-pointer rounded-full bg-muted"
-          >
-            <span
-              className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-primary to-[color-mix(in_srgb,var(--primary)_60%,white)]"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
+            aria-valuetext={`${formatDuration(progress.time)} / ${formatDuration(progress.duration)}`}
+            min={0}
+            max={progress.duration || 0}
+            step={1}
+            value={Math.min(progress.time, progress.duration || 0)}
+            disabled={!source || !progress.duration}
+            onChange={event => {
+              const time = Number(event.target.value);
+              if (audioRef.current) audioRef.current.currentTime = time;
+              positionRef.current = time;
+              setProgress(current => ({ ...current, time }));
+            }}
+            className="h-5 min-w-0 flex-1 cursor-pointer accent-primary"
+          />
           <span className="text-[11.5px] tabular-nums text-muted-foreground">{formatDuration(progress.duration)}</span>
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <div className="col-start-3 row-start-1 ml-auto flex shrink-0 items-center gap-1 sm:order-none sm:gap-1.5">
           <VolumeControl className="hidden xl:flex" />
           <Select value={quality} onValueChange={value => void setQuality(value as QualityOption['id'])}>
             <SelectTrigger className="hidden h-8 w-[8.5rem] lg:flex" aria-label="音质">
@@ -186,6 +195,15 @@ export function MiniPlayer() {
               ))}
             </SelectContent>
           </Select>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(value => !value)}
+            aria-label="播放设置"
+            aria-expanded={settingsOpen}
+            className={cn('grid size-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground xl:hidden', settingsOpen && 'bg-accent text-accent-foreground')}
+          >
+            <SlidersHorizontal className="size-[18px]" />
+          </button>
           <button
             type="button"
             onClick={() => setQueueOpen(value => !value)}
@@ -209,20 +227,37 @@ export function MiniPlayer() {
         </div>
       </div>
 
+      {settingsOpen && (
+        <div role="group" aria-label="播放设置" className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 xl:hidden">
+          <VolumeControl className="w-36" />
+          <Select value={quality} onValueChange={value => void setQuality(value as QualityOption['id'])}>
+            <SelectTrigger className="h-9 w-36 lg:hidden" aria-label="音质"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {(capabilities?.qualities ?? []).map(option => (
+                <SelectItem key={option.id} value={option.id} disabled={!option.enabled}>
+                  {option.label} {option.format}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       {(message || status === 'error' || source?.trial) && (
-        <div className="flex flex-wrap items-center gap-2 px-4 pb-2.5 md:px-6">
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2.5 md:px-6" role="status">
           {source?.trial && <Badge variant="outline">试听片段</Badge>}
           {message && (
             <p className={cn('text-[11.5px]', status === 'error' ? 'text-destructive' : 'text-muted-foreground')}>
               {message}
             </p>
           )}
+          {status === 'error' && <button type="button" className="text-xs font-medium text-primary underline" onClick={() => { retriedRef.current = false; void retry(); }}>重试</button>}
           {willSkip && <span className="text-[11.5px] text-muted-foreground">即将跳到下一首…</span>}
         </div>
       )}
 
       {queueOpen && (
-        <ul className="max-h-64 overflow-y-auto border-t border-border p-2">
+        <ul className="max-h-[25dvh] overflow-y-auto border-t border-border p-2">
           {playlist.tracks.map((item, position) => (
             <li key={item.id}>
               <button

@@ -8,8 +8,9 @@ import { PLATFORMS, PLATFORM_IDS, guestUser } from './platforms.js';
 import { recordPlayback } from './playback-history.js';
 import { recordPlayEvent } from './telemetry.js';
 import { degradeMode } from './degrade.js';
+import { admitControl, admitRefresh } from './request-policy.js';
 
-const resolving = new Map();
+const resolvingByDatabase = new WeakMap();
 const cacheEnabled = env => env.AUDIO_CACHE && String(env.AUDIO_CACHE_ENABLED) === 'true';
 // 音源解析结果只活 90 秒，放进 D1 会让每次解析都产生一次写入；Cache API 无写入成本。
 const RESOLVE_CACHE_TTL_SECONDS = 90;
@@ -88,14 +89,26 @@ function writeResolveCache(env, ctx, key, source) {
   return ctx?.waitUntil ? ctx.waitUntil(put) : put;
 }
 
-async function resolvePlayerSource(env, user, songId, quality, fresh = false, ctx) {
-  const key = await resolveCacheKey(user, songId, quality);
-  if (!fresh) {
-    const cached = await readResolveCache(env, key);
-    if (cached) return cached;
-    if (resolving.has(key)) return resolving.get(key);
+async function resolvePlayerSource(env, user, songId, quality, fresh = false, ctx, request) {
+  const pendingKey = [user.platform, user.id, songId, quality].join(':');
+  let resolving = resolvingByDatabase.get(env.DB);
+  if (!resolving) resolvingByDatabase.set(env.DB, resolving = new Map());
+  // 包含读缓存与刷新准入，防止并发请求在 await 后各自开始回源。
+  const pending = resolving.get(pendingKey);
+  if (pending) {
+    const source = await pending.promise;
+    if (!fresh || !pending.cacheHit) return source;
+    // 普通读取若命中旧缓存，随后到达的 fresh 仍需真正刷新。
+    if (resolving.get(pendingKey) === pending) resolving.delete(pendingKey);
+    return resolvePlayerSource(env, user, songId, quality, true, ctx, request);
   }
+  const entry = { cacheHit: false, promise: null };
   const promise = (async () => {
+    const key = await resolveCacheKey(user, songId, quality);
+    if (!fresh) {
+      const cached = await readResolveCache(env, key);
+      if (cached) { entry.cacheHit = true; return cached; }
+    } else await admitRefresh(env, request, user, key);
     // 游客平台没有 Cookie，适配器只会用到公开接口
     const cookie = user.guest ? '' : await decryptCookie(env, user);
     const upstream = adapter(user.platform);
@@ -112,8 +125,9 @@ async function resolvePlayerSource(env, user, songId, quality, fresh = false, ct
     await writeResolveCache(env, ctx, key, source);
     return source;
   })();
-  resolving.set(key, promise);
-  try { return await promise; } finally { if (resolving.get(key) === promise) resolving.delete(key); }
+  entry.promise = promise;
+  resolving.set(pendingKey, entry);
+  try { return await promise; } finally { if (resolving.get(pendingKey) === entry) resolving.delete(pendingKey); }
 }
 
 // R2 Class A 免费额度是 100 万次/月，而冷播放每次歌单会产生 30 次填充写入，
@@ -194,9 +208,14 @@ function handlePlayer(request, env, ctx) {
       return user || (meta.guestPlayback ? guestUser(platform) : null);
     },
     verifyGrant: (grant, platform, id) => getPlaybackUser(env, grant, platform, id),
+    admit: (req, user, action, hasGrant) => {
+      if (!hasGrant || action === 'playlist' || action === 'resolve') {
+        return admitControl(env, req, user.platform, hasGrant);
+      }
+    },
     mintGrant: (user, id) => createPlaybackToken(env, user, id),
     playlist: (user, id) => cachedPlaylist(env, user, id, ctx),
-    resolve: (user, songId, quality, fresh) => resolvePlayerSource(env, user, songId, quality, fresh, ctx),
+    resolve: (user, songId, quality, fresh) => resolvePlayerSource(env, user, songId, quality, fresh, ctx, request),
     cover: (req, user, url, song) => proxyPlayerSource(req, env, ctx, user, song.id, { url }, true),
     async media(req, user, song, id, source) {
       const response = await proxyPlayerSource(req, env, ctx, user, song.id, source);

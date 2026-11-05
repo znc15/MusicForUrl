@@ -16,11 +16,13 @@ export interface PlatformInfo {
   short: string;
   /** 是否支持账号登录（有 Cookie、头像、昵称） */
   account: boolean;
+  /** 生成播放链接是否要求登录 */
+  requireLogin: boolean;
   /** 是否有「我的音乐」：歌单、收藏、播放记录都依赖账号 */
   library: boolean;
   /** 是否能解析音源并生成播放链接 */
   playback: boolean;
-  /** 能力边界的一句话说明，直接展示给用户 */
+  /** 平台能力摘要 */
   note: string;
 }
 

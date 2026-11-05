@@ -8,8 +8,8 @@
 
 ## 维护分支
 
-- **`codex/cloudflare`**：后续功能、修复与文档的维护入口，本页命令适用于此分支。
-- **`codex/nodejs-frozen`**：Node.js / Docker 冻结版本，保留拆分基线 `f3830c4` 的原始代码与运行说明。需要自有服务器部署时，使用[冻结版部署文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
+- **`master`**：后续功能、修复与文档的维护入口，本页命令适用于此分支。
+- **`node`**：Node.js / Docker 冻结版本，保留拆分基线 `f3830c4` 的原始代码与运行说明。需要自有服务器部署时，使用[冻结版部署文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
 
 分支已在本地拆分；远端发布前，可通过上述基线提交链接查看冻结版文档。
 
@@ -42,7 +42,7 @@
 
 ## 快速开始
 
-需要 Node.js 24+ 与 npm。以下命令从 `codex/cloudflare` 工作副本根目录执行，分别安装前端与 Worker 依赖：
+需要 Node.js 24+ 与 npm。以下命令从 `master` 工作副本根目录执行，分别安装前端与 Worker 依赖：
 
 ```powershell
 npm --prefix web ci
@@ -61,7 +61,7 @@ npm --prefix cloudflare run db:local
 npm run dev
 ```
 
-`npm run dev` 会先构建 `web/` 再以本地 D1 启动 Wrangler。根目录 `npm test` 运行播放器基础模块与 Cloudflare 回归测试，`npm run check` 检查前端类型，`npm run build` 生成 `web/dist`。
+`npm run dev` 会先构建 `web/` 再以本地 D1 启动 Wrangler。根目录 `npm test` 运行基础模块、Cloudflare、数据库迁移与前端状态机回归；`npm run check` 检查前端类型，`npm run build` 生成 `web/dist`。
 
 ## 部署
 

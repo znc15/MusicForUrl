@@ -19,15 +19,15 @@ editLink: false
 
 # Node.js / Docker 冻结版
 
-Node.js / Docker 版本保存在 \`codex/nodejs-frozen\` 分支，基线为 \`f3830c4\`。部署命令、环境变量、SQLite 与 FFmpeg 配置见[原始部署文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
+Node.js / Docker 版本保存在 \`node\` 分支，基线为 \`f3830c4\`。部署命令、环境变量、SQLite 与 FFmpeg 配置见[原始部署文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
 
 在已建立冻结分支的本地仓库中，保存当前工作后切换：
 
 \`\`\`sh
-git switch codex/nodejs-frozen
+git switch node
 \`\`\`
 
-后续 Cloudflare 功能与修复在 \`codex/cloudflare\` 维护，运行方式见 [Cloudflare 部署](../guide/deployment)。
+后续 Cloudflare 功能与修复在 \`master\` 维护，运行方式见 [Cloudflare 部署](../guide/deployment)。
 `);
 const links = new Map(docs.map(([source, target]) => [source.replaceAll('\\', '/'), '/generated/' + target]));
 for (const [source, target] of docs) {
@@ -37,7 +37,7 @@ for (const [source, target] of docs) {
     const [filename, anchor] = url.split('#');
     const path = relative(root, resolve(root, dirname(source), filename)).replaceAll('\\', '/');
     if (path === '.github/assets/workspace-preview.jpg') return label + '(/images/workspace-preview.jpg)';
-    const destination = links.get(path) || 'https://github.com/znc15/MusicForUrl/blob/codex/cloudflare/' + path;
+    const destination = links.get(path) || 'https://github.com/znc15/MusicForUrl/blob/master/' + path;
     return label + '(' + destination + (anchor ? '#' + anchor : '') + ')';
   });
   await writeFile(resolve(website, 'generated/' + target + '.md'), '---\neditLink: false\n---\n\n' + text);

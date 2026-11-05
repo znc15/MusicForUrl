@@ -17,7 +17,7 @@ export class ApiError extends Error {
   }
 }
 
-interface RequestOptions {
+export interface RequestOptions {
   method?: string;
   body?: unknown;
   token?: string;
@@ -78,12 +78,12 @@ const query = (params: Record<string, string | number | undefined>) => {
 };
 
 export const api = {
-  authStatus(platform: Platform): Promise<AuthStatus> {
-    return request<{ data: AuthStatus }>(apiPath(platform, '/auth/status'), platform)
+  authStatus(platform: Platform, options: RequestOptions = {}): Promise<AuthStatus> {
+    return request<{ data: AuthStatus }>(apiPath(platform, '/auth/status'), platform, options)
       .then(result => result.data);
   },
-  logout(platform: Platform): Promise<void> {
-    return request(apiPath(platform, '/auth/logout'), platform, { method: 'POST', body: {} })
+  logout(platform: Platform, token?: string): Promise<void> {
+    return request(apiPath(platform, '/auth/logout'), platform, { method: 'POST', body: {}, token })
       .then(() => undefined);
   },
 
@@ -146,40 +146,40 @@ export const api = {
   },
 
   // 一次请求完成解析 → 取歌单 → 签发链接，替代连续的 /parse + /url
-  generate(platform: Platform, url: string): Promise<GeneratedLink> {
+  generate(platform: Platform, url: string, options: RequestOptions = {}): Promise<GeneratedLink> {
     return request<{ data: GeneratedLink }>(
-      apiPath(platform, '/playlist/generate'), platform, { method: 'POST', body: { url } },
+      apiPath(platform, '/playlist/generate'), platform, { ...options, method: 'POST', body: { url } },
     ).then(result => result.data);
   },
 
-  userPlaylists(platform: Platform, offset: number, limit: number): Promise<Paged<PlaylistSummary>> {
+  userPlaylists(platform: Platform, offset: number, limit: number, options: RequestOptions = {}): Promise<Paged<PlaylistSummary>> {
     return request<{ data: PlaylistSummary[]; total: number }>(
-      apiPath(platform, `/playlist/user${query({ offset, limit })}`), platform,
+      apiPath(platform, `/playlist/user${query({ offset, limit })}`), platform, options,
     );
   },
-  favorites(platform: Platform, offset: number, limit: number): Promise<Paged<FavoriteItem>> {
+  favorites(platform: Platform, offset: number, limit: number, options: RequestOptions = {}): Promise<Paged<FavoriteItem>> {
     return request<{ data: FavoriteItem[]; total: number }>(
-      apiPath(platform, `/favorites${query({ offset, limit })}`), platform,
+      apiPath(platform, `/favorites${query({ offset, limit })}`), platform, options,
     );
   },
-  favoriteCheck(platform: Platform, playlistId: string) {
+  favoriteCheck(platform: Platform, playlistId: string, options: RequestOptions = {}) {
     return request<{ data: { favorited: boolean } }>(
-      apiPath(platform, `/favorites/check/${playlistId}`), platform,
+      apiPath(platform, `/favorites/check/${playlistId}`), platform, options,
     ).then(result => result.data.favorited);
   },
-  addFavorite(platform: Platform, item: { playlistId: string; playlistName: string; playlistCover: string }) {
-    return request(apiPath(platform, '/favorites'), platform, { method: 'POST', body: item });
+  addFavorite(platform: Platform, item: { playlistId: string; playlistName: string; playlistCover: string }, token?: string) {
+    return request(apiPath(platform, '/favorites'), platform, { method: 'POST', body: item, token });
   },
-  removeFavorite(platform: Platform, playlistId: string) {
-    return request(apiPath(platform, `/favorites/${playlistId}`), platform, { method: 'DELETE' });
+  removeFavorite(platform: Platform, playlistId: string, token?: string) {
+    return request(apiPath(platform, `/favorites/${playlistId}`), platform, { method: 'DELETE', token });
   },
-  recent(platform: Platform, offset: number, limit: number): Promise<Paged<HistoryItem>> {
+  recent(platform: Platform, offset: number, limit: number, options: RequestOptions = {}): Promise<Paged<HistoryItem>> {
     return request<{ data: HistoryItem[]; total: number }>(
-      apiPath(platform, `/history/recent${query({ offset, limit })}`), platform,
+      apiPath(platform, `/history/recent${query({ offset, limit })}`), platform, options,
     );
   },
-  top(platform: Platform, limit: number): Promise<TopSong[]> {
-    return request<{ data: TopSong[] }>(apiPath(platform, `/history/top${query({ limit })}`), platform)
+  top(platform: Platform, limit: number, options: RequestOptions = {}): Promise<TopSong[]> {
+    return request<{ data: TopSong[] }>(apiPath(platform, `/history/top${query({ limit })}`), platform, options)
       .then(result => result.data);
   },
 
@@ -190,19 +190,19 @@ export const api = {
   stats(): Promise<SiteStats> {
     return request<{ data: SiteStats }>('/api/stats', 'netease').then(result => result.data);
   },
-  playerPlaylist(platform: Platform, playlistId: string, grant = ''): Promise<PlayerPlaylist> {
+  playerPlaylist(platform: Platform, playlistId: string, grant = '', signal?: AbortSignal): Promise<PlayerPlaylist> {
     return request<{ data: PlayerPlaylist }>(
-      `/api/player/playlist${query({ platform, id: playlistId, grant })}`, platform, { token: grant || undefined },
+      `/api/player/playlist${query({ platform, id: playlistId, grant })}`, platform, { token: grant || undefined, signal },
     ).then(result => result.data);
   },
   resolve(platform: Platform, options: {
-    playlistId: string; grant?: string; songId: string; quality: QualityId; fresh?: boolean;
+    playlistId: string; grant?: string; songId: string; quality: QualityId; fresh?: boolean; signal?: AbortSignal;
   }): Promise<ResolvedSource> {
-    const { playlistId, grant = '', songId, quality, fresh } = options;
+    const { playlistId, grant = '', songId, quality, fresh, signal } = options;
     return request<{ data: ResolvedSource }>(
       `/api/player/resolve/${songId}${query({ platform, id: playlistId, grant, quality, fresh: fresh ? 1 : undefined })}`,
       platform,
-      { token: grant || undefined },
+      { token: grant || undefined, signal },
     ).then(result => result.data);
   },
 };

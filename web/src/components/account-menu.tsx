@@ -39,7 +39,7 @@ function AccountRow({ platform, onNavigate }: { platform: Platform; onNavigate: 
         <p className="truncate text-[11.5px] text-muted-foreground">
           {user
             ? `${info.label} · ID ${user.userId}${user.vipType ? ` · VIP ${user.vipType}` : ''}`
-            : info.note}
+            : info.label}
         </p>
       </div>
 
@@ -140,7 +140,7 @@ export function AccountMenu() {
         <div
           role="dialog"
           aria-label="账号"
-          className="absolute right-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
+          className="absolute right-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] max-h-[calc(100dvh-8rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover shadow-lg"
         >
           <div className="divide-y divide-border">
             {ACCOUNT_PLATFORMS.map(item => (

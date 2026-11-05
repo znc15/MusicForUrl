@@ -6,6 +6,7 @@ import type { Platform, PlayerPlaylist, QualityId, ResolvedSource } from '../lib
 export type PlayerStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error';
 
 interface PlayerState {
+  platform: Platform | null;
   playlist: PlayerPlaylist | null;
   index: number;
   quality: QualityId;
@@ -17,15 +18,15 @@ interface PlayerState {
   autoplay: boolean;
   generation: number;
 
-  open(platform: Platform, playlistId: string, grant?: string): Promise<void>;
+  open(platform: Platform, playlistId: string, grant?: string): Promise<boolean>;
   playIndex(index: number): Promise<void>;
   next(): Promise<void>;
   prev(): Promise<void>;
   setQuality(quality: QualityId): Promise<void>;
   retry(): Promise<void>;
-  markPlaying(): void;
-  markPaused(): void;
-  fail(message: string): void;
+  markPlaying(generation?: number): void;
+  markPaused(generation?: number): void;
+  fail(message: string, generation?: number): void;
   clear(): void;
 }
 
@@ -41,9 +42,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
   async function load(index: number, options: { fresh?: boolean; autoplay?: boolean } = {}) {
     const { playlist, quality } = get();
-    if (!playlist) return;
+    if (!playlist) return false;
     const track = playlist.tracks[index];
-    if (!track) return;
+    if (!track) return false;
 
     clearSkipTimer();
     inFlight?.abort();
@@ -52,6 +53,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     const generation = get().generation + 1;
     set({
       index,
+      source: null,
       status: 'loading',
       message: '',
       errorCode: '',
@@ -66,11 +68,13 @@ export const usePlayer = create<PlayerState>((set, get) => {
         songId: track.id,
         quality,
         fresh: options.fresh,
+        signal: controller.signal,
       });
-      if (get().generation !== generation) return;
+      if (controller.signal.aborted || get().generation !== generation) return false;
       set({ source, status: 'loading', message: source.warnings.join(' ') });
+      return true;
     } catch (error) {
-      if (get().generation !== generation) return;
+      if (controller.signal.aborted || get().generation !== generation) return false;
       const errorCode = error instanceof ApiError ? error.code : '';
       set({
         status: 'error',
@@ -86,10 +90,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
           if (get().generation === generation && get().errorCode === 'unavailable') void get().next();
         }, 1200);
       }
+      return false;
+    } finally {
+      if (inFlight === controller) inFlight = null;
     }
   }
 
   return {
+    platform: null,
     playlist: null,
     index: 0,
     quality: initialQuality(),
@@ -103,25 +111,33 @@ export const usePlayer = create<PlayerState>((set, get) => {
     async open(platform, playlistId, grant = '') {
       clearSkipTimer();
       inFlight?.abort();
-      set({ status: 'loading', message: '', errorCode: '', source: null, playlist: null });
+      const controller = new AbortController();
+      inFlight = controller;
+      const generation = get().generation + 1;
+      set({ platform, generation, index: 0, status: 'loading', message: '', errorCode: '', source: null, playlist: null });
       try {
-        const playlist = await api.playerPlaylist(platform, playlistId, grant);
+        const playlist = await api.playerPlaylist(platform, playlistId, grant, controller.signal);
+        if (controller.signal.aborted || get().generation !== generation) return false;
         if (!playlist.tracks.length) {
           set({ status: 'error', message: '这个歌单里没有可播放的歌曲', errorCode: 'empty' });
-          return;
+          return false;
         }
         set({ playlist });
-        await load(0, { autoplay: true });
+        return await load(0, { autoplay: true });
       } catch (error) {
+        if (controller.signal.aborted || get().generation !== generation) return false;
         set({
           status: 'error',
           message: error instanceof Error ? error.message : '歌单加载失败',
           errorCode: error instanceof ApiError ? error.code : '',
         });
+        return false;
+      } finally {
+        if (inFlight === controller) inFlight = null;
       }
     },
 
-    playIndex(index) { return load(index, { autoplay: true }); },
+    async playIndex(index) { await load(index, { autoplay: true }); },
 
     async next() {
       const { playlist, index } = get();
@@ -150,16 +166,22 @@ export const usePlayer = create<PlayerState>((set, get) => {
       await load(get().index, { fresh: true, autoplay: true });
     },
 
-    markPlaying() { set({ status: 'playing' }); },
-    markPaused() { set({ status: 'paused' }); },
-    fail(message) { set({ status: 'error', message, errorCode: 'media' }); },
+    markPlaying(generation = get().generation) {
+      if (generation === get().generation && get().source) set({ status: 'playing' });
+    },
+    markPaused(generation = get().generation) {
+      if (generation === get().generation && get().source && get().status === 'playing') set({ status: 'paused' });
+    },
+    fail(message, generation = get().generation) {
+      if (generation === get().generation && get().source) set({ status: 'error', message, errorCode: 'media' });
+    },
 
     clear() {
       clearSkipTimer();
       inFlight?.abort();
       inFlight = null;
       set({
-        playlist: null, index: 0, source: null, status: 'idle', message: '', errorCode: '',
+        platform: null, playlist: null, index: 0, source: null, status: 'idle', message: '', errorCode: '',
         autoplay: false, generation: get().generation + 1,
       });
     },

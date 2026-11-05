@@ -26,6 +26,33 @@ test('QQ QR code generation works without Node globals', async () => {
   }
 });
 
+test('QQ profile lookup fails closed and only enriches an independently confirmed QR identity', async t => {
+  const cookie = 'uin=12345; qm_keyst=fixture';
+  let payload;
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    if (payload instanceof Error) throw payload;
+    return Response.json(payload);
+  });
+  assert.deepEqual(await qqmusic.checkLoginStatus(cookie), { logged: false });
+  assert.deepEqual(await qqmusic.checkLoginStatus(cookie, '99999'), { logged: false });
+  assert.equal(calls, 0, 'a client-provided uin and key alone are never authentication');
+  const profile = { uin: 12345, nick: 'Trusted nickname', headurl: '', isvip: 1 };
+  for (const response of [
+    new Error('upstream offline'), {}, { code: 0, req_0: { code: 1000 } },
+    { code: 0, req_0: { code: 0, data: { code: 0, map_userinfo: { '12345': { ...profile, uin: 99999 } } } } },
+  ]) {
+    payload = response;
+    assert.deepEqual(await qqmusic.checkLoginStatus(cookie, '12345'), { logged: false });
+  }
+  payload = { code: 0, req_0: { code: 0, data: { code: 0, map_userinfo: { '12345': profile } } } };
+  const result = await qqmusic.checkLoginStatus(cookie, '12345');
+  assert.equal(result.logged, true);
+  assert.equal(result.userId, '12345');
+  assert.equal(result.nickname, 'Trusted nickname');
+});
+
 // The Worker runs without nodejs_compat, so a stray Node global is a runtime 500
 // that no other test would catch. Walk the Worker's own import graph and refuse
 // any Node-only global in a file that ships inside the bundle.

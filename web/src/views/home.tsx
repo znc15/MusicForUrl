@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Copy, Heart, Library, Link2, MonitorPlay } from 'lucide-react';
+import { accountQueryKey, queryClient, removeCachedFavorite } from '@/lib/query-client';
+import { EmptyState } from '@/components/page-header';
 import { api } from '@/lib/api';
 import { PLAYBACK_PLATFORMS, isPlatform, platformInfo, platformLabel } from '@/lib/platforms';
 import { readGeneratorPlatform, writeGeneratorPlatform } from '@/lib/storage';
@@ -18,36 +20,26 @@ import { useUi } from '@/stores/ui';
 
 function RecentGrid({ platform }: { platform: Platform }) {
   const info = platformInfo(platform);
-  // 游客平台没有播放记录可言，这里直接换成能力说明，而不是给一个永远为空的列表
-  const loggedIn = useAuth(state => !!state.users[platform]);
+  const user = useAuth(state => state.users[platform]);
+  const token = useAuth(state => state.tokens[platform]);
+  const loggedIn = !!user;
   const openLogin = useUi(state => state.openLogin);
   const openPlaylist = usePlayer(state => state.open);
   const navigate = useNavigate();
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['recent', platform, 'home'],
-    queryFn: () => api.recent(platform, 0, 6),
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: [...accountQueryKey(platform, user?.userId ?? '', 'recent'), 'home'],
+    queryFn: ({ signal }) => api.recent(platform, 0, 6, { token, signal }),
     enabled: loggedIn && info.library,
     staleTime: 60_000,
   });
 
   async function play(playlistId: string) {
-    await openPlaylist(platform, playlistId);
-    navigate('/preview');
+    if (await openPlaylist(platform, playlistId)) navigate('/preview');
+    else if (usePlayer.getState().status === 'error') toast.error(usePlayer.getState().message);
   }
 
-  if (!info.library) {
-    return (
-      <section>
-        <div className="mb-3.5 flex items-baseline justify-between">
-          <h2 className="text-base font-semibold">关于{info.short}</h2>
-        </div>
-        <div className="rounded-xl border border-dashed border-border px-5 py-6 text-[13px] text-muted-foreground">
-          {info.note} 该平台没有账号体系，因此没有个人歌单、收藏与播放记录。
-        </div>
-      </section>
-    );
-  }
+  if (!info.library) return null;
 
   return (
     <section>
@@ -61,6 +53,8 @@ function RecentGrid({ platform }: { platform: Platform }) {
           登录后这里会显示最近播放的歌单。
           <Button variant="outline" size="sm" onClick={() => openLogin(platform)}>登录音乐账号</Button>
         </div>
+      ) : error ? (
+        <EmptyState text={error.message || '加载失败，请重试'} action={<Button variant="outline" size="sm" onClick={() => void refetch()}>重试</Button>} />
       ) : isLoading ? (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           {Array.from({ length: 6 }).map((_, index) => <Skeleton key={index} className="aspect-square rounded-xl" />)}
@@ -91,19 +85,27 @@ function RecentGrid({ platform }: { platform: Platform }) {
 export function HomeView() {
   const [platform, setPlatform] = React.useState<Platform>(readGeneratorPlatform);
   const [input, setInput] = React.useState('');
-  const [result, setResult] = React.useState<GeneratedLink | null>(null);
+  const [resultState, setResult] = React.useState<{ data: GeneratedLink; platform: Platform; token: string } | null>(null);
   const [favorited, setFavorited] = React.useState(false);
+  const [updatingFavorite, setUpdatingFavorite] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const users = useAuth(state => state.users);
+  const tokens = useAuth(state => state.tokens);
+  const result = resultState?.platform === platform && resultState.token === tokens[platform] ? resultState.data : null;
+  const resultRef = React.useRef(result);
+  resultRef.current = result;
+  const requestRef = React.useRef<AbortController | null>(null);
   const openLogin = useUi(state => state.openLogin);
   const openPlaylist = usePlayer(state => state.open);
   const info = platformInfo(platform);
   // 游客平台不需要登录就能生成链接
-  const loggedIn = !info.account || !!users[platform];
+  const canGenerate = !info.requireLogin || !!users[platform];
 
   function switchPlatform(next: Platform) {
+    requestRef.current?.abort();
+    setBusy(false);
     setPlatform(next);
     writeGeneratorPlatform(next);
     setResult(null);
@@ -112,20 +114,34 @@ export function HomeView() {
 
   const generate = React.useCallback(async (raw: string, target: Platform) => {
     if (!raw.trim()) return;
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const token = useAuth.getState().tokens[target];
+    const current = () => !controller.signal.aborted && useAuth.getState().tokens[target] === token;
     setBusy(true);
+    setResult(null);
     try {
-      const data = await api.generate(target, raw.trim());
-      setResult(data);
+      const data = await api.generate(target, raw.trim(), { token, signal: controller.signal });
+      if (!current()) return;
+      setResult({ data, platform: target, token });
       // 游客平台没有收藏，跳过这次请求
-      setFavorited(platformInfo(target).library
-        ? await api.favoriteCheck(target, data.playlist?.id ?? '').catch(() => false)
-        : false);
+      const favorite = platformInfo(target).library
+        ? await api.favoriteCheck(target, data.playlist?.id ?? '', { token, signal: controller.signal }).catch(() => false)
+        : false;
+      if (current()) setFavorited(favorite);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '生成失败');
+      if (current()) toast.error(error instanceof Error ? error.message : '生成失败');
     } finally {
-      setBusy(false);
+      if (requestRef.current === controller) setBusy(false);
     }
   }, []);
+
+  React.useEffect(() => {
+    requestRef.current?.abort();
+    setResult(null); setFavorited(false); setBusy(false);
+    return () => { requestRef.current?.abort(); };
+  }, [tokens]);
 
   // 支持 /?play=<歌单 ID>&platform=<平台> 深链，与旧版行为一致
   React.useEffect(() => {
@@ -136,29 +152,32 @@ export function HomeView() {
     setPlatform(target);
     writeGeneratorPlatform(target);
     setInput(id);
-    const needsLogin = platformInfo(target).account && !useAuth.getState().tokens[target];
+    const needsLogin = platformInfo(target).requireLogin && !useAuth.getState().tokens[target];
     if (!needsLogin) void generate(id, target);
   }, [params, generate]);
 
   async function toggleFavorite() {
     const playlist = result?.playlist;
-    if (!playlist) return;
+    if (!playlist || updatingFavorite) return;
+    const token = tokens[platform];
+    const userId = users[platform]?.userId ?? '';
+    setUpdatingFavorite(true);
     try {
       if (favorited) {
-        await api.removeFavorite(platform, playlist.id);
-        setFavorited(false);
-        toast.success('已取消收藏');
-      } else {
-        await api.addFavorite(platform, {
-          playlistId: playlist.id,
-          playlistName: playlist.name,
-          playlistCover: playlist.cover,
-        });
-        setFavorited(true);
-        toast.success('收藏成功');
+        await api.removeFavorite(platform, playlist.id, token);
+        if (useAuth.getState().tokens[platform] === token) removeCachedFavorite(platform, userId, playlist.id);
       }
+      else await api.addFavorite(platform, {
+        playlistId: playlist.id, playlistName: playlist.name, playlistCover: playlist.cover,
+      }, token);
+      await queryClient.invalidateQueries({ queryKey: accountQueryKey(platform, userId, 'favorites') });
+      if (useAuth.getState().tokens[platform] !== token || resultRef.current !== result) return;
+      setFavorited(!favorited);
+      toast.success(favorited ? '已取消收藏' : '收藏成功');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '操作失败');
+      if (resultRef.current === result) toast.error(error instanceof Error ? error.message : '操作失败');
+    } finally {
+      setUpdatingFavorite(false);
     }
   }
 
@@ -175,8 +194,8 @@ export function HomeView() {
   async function preview() {
     const playlist = result?.playlist;
     if (!playlist) return;
-    await openPlaylist(platform, playlist.id);
-    navigate('/preview');
+    if (await openPlaylist(platform, playlist.id)) navigate('/preview');
+    else if (usePlayer.getState().status === 'error') toast.error(usePlayer.getState().message);
   }
 
   return (
@@ -186,7 +205,7 @@ export function HomeView() {
         <div
           aria-hidden="true"
           className="pointer-events-none absolute -right-24 -top-40 size-[420px] rounded-full"
-          style={{ backgroundImage: 'radial-gradient(circle, rgb(111 199 234 / 42%), transparent 66%)' }}
+          style={{ backgroundImage: 'radial-gradient(circle, rgb(111 199 234 / 12%), transparent 66%)' }}
         />
         <div className="relative">
           <h1 className="text-[27px] font-semibold leading-tight tracking-tight">把歌单变成播放链接</h1>
@@ -207,11 +226,11 @@ export function HomeView() {
             className="mt-3 flex flex-col gap-2.5 sm:flex-row"
             onSubmit={event => {
               event.preventDefault();
-              if (!loggedIn) { openLogin(platform); return; }
+              if (!canGenerate) { openLogin(platform); return; }
               void generate(input, platform);
             }}
           >
-            <div className="flex h-[52px] flex-1 items-center gap-3 rounded-xl bg-[var(--hero-field)] px-4 text-[var(--hero-field-foreground)] shadow-lg">
+            <div className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 rounded-xl bg-[var(--hero-field)] px-4 text-[var(--hero-field-foreground)] shadow-lg sm:flex-1">
               <Link2 className="size-4 shrink-0" />
               <input
                 value={input}
@@ -220,7 +239,7 @@ export function HomeView() {
                 aria-label="歌单链接或 ID"
                 autoComplete="off"
                 spellCheck={false}
-                className="h-full flex-1 bg-transparent text-sm text-[#123043] outline-none placeholder:text-[var(--hero-field-foreground)]"
+                className="h-full min-w-0 flex-1 bg-transparent text-base sm:text-sm text-[#123043] outline-none placeholder:text-[var(--hero-field-foreground)]"
               />
             </div>
             <button
@@ -228,24 +247,11 @@ export function HomeView() {
               disabled={busy}
               className="h-[52px] shrink-0 rounded-xl bg-white px-8 text-sm font-semibold text-[var(--hero-mid)] shadow-lg transition-transform hover:-translate-y-px disabled:opacity-70"
             >
-              {busy ? '生成中…' : '生成链接'}
+              {busy ? '生成中…' : canGenerate ? '生成链接' : '登录账号'}
             </button>
           </form>
 
-          {!loggedIn ? (
-            <p className="mt-3 text-[12.5px] text-[var(--hero-muted)]">
-              需要先登录{platformLabel(platform)}账号。
-              <button
-                type="button"
-                onClick={() => openLogin(platform)}
-                className="ml-1 font-semibold text-white underline-offset-2 hover:underline"
-              >
-                立即登录
-              </button>
-            </p>
-          ) : (
-            <p className="mt-3 text-[12.5px] text-[var(--hero-muted)]">{info.note}</p>
-          )}
+
         </div>
       </section>
 
@@ -260,7 +266,7 @@ export function HomeView() {
             <p className="truncate text-[15.5px] font-semibold">{result.playlist.name}</p>
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">
               {platformLabel(platform)} · {result.playlist.songCount ?? result.playlist.trackCount ?? 0} 首 ·
-              {info.account ? ' 链接有效期 24 小时 · 退出登录会立即撤销' : ' 链接有效期 24 小时'}
+               链接有效期 24 小时
             </p>
             <div className="mt-2.5 flex items-center gap-2.5 rounded-lg border border-border bg-muted/50 px-3 py-2">
               <code className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground">{result.url}</code>
@@ -278,7 +284,7 @@ export function HomeView() {
             <Button onClick={copyLink}><Copy />复制</Button>
             <Button variant="outline" onClick={() => void preview()}><MonitorPlay />预览</Button>
             {info.library && (
-              <Button variant="outline" onClick={() => void toggleFavorite()}>
+              <Button variant="outline" disabled={updatingFavorite} onClick={() => void toggleFavorite()}>
                 <Heart className={favorited ? 'fill-current' : undefined} />
                 {favorited ? '已收藏' : '收藏'}
               </Button>

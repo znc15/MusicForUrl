@@ -10,7 +10,7 @@
     "start": "npm --prefix cloudflare run dev",
     "dev": "npm --prefix cloudflare run dev",
     "check": "npm --prefix web run check",
-    "test": "node scripts/test.cjs && npm --prefix cloudflare test",
+    "test": "node scripts/test.cjs && npm --prefix cloudflare test && npm --prefix web test",
     "build": "npm --prefix web run build",
     "build:worker": "npm run build && npm --prefix cloudflare run build:worker",
     "docs:build": "npm --prefix website run build",

@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { formatCount, formatDateTime, formatTotalDuration } from '@/lib/utils';
 import { PLATFORMS } from '@/lib/platforms';
 import { Badge, Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/input';
 import { PageHeader } from '@/components/page-header';
 import { useCapabilities } from '@/hooks/use-capabilities';
@@ -68,12 +69,16 @@ function CapabilityCell({ ok, text }: { ok: boolean; text: string }) {
 }
 
 export function AboutView() {
-  const { data: capabilities } = useCapabilities();
-  const { data: health } = useQuery({
+  const capabilityQuery = useCapabilities();
+  const capabilities = capabilityQuery.data;
+  const healthQuery = useQuery({
     queryKey: ['health'],
-    queryFn: async (): Promise<Health> => {
-      const response = await fetch('/api/health', { cache: 'no-store' });
-      return response.json() as Promise<Health>;
+    queryFn: async ({ signal }): Promise<Health> => {
+      const response = await fetch('/api/health', { cache: 'no-store', signal });
+      if (!response.ok) throw new Error(`服务状态获取失败（HTTP ${response.status}）`);
+      const data: Health = await response.json();
+      if (!data || typeof data.status !== 'string') throw new Error('服务状态响应无效');
+      return data;
     },
     staleTime: 60_000,
   });
@@ -83,6 +88,9 @@ export function AboutView() {
     staleTime: 5 * 60_000,
   });
 
+  const health = healthQuery.data;
+  const capabilityUnknown = capabilityQuery.isPending ? '加载中…' : '未知';
+  const healthUnknown = healthQuery.isPending ? '加载中…' : '未知';
   const data = stats.data;
   const loading = stats.isLoading;
   const updatedAt = data?.updatedAt ? formatDateTime(new Date(data.updatedAt).toISOString()) : '';
@@ -101,16 +109,21 @@ export function AboutView() {
           <h2 className="text-[15px] font-semibold">站点统计</h2>
           <p className="text-[11.5px] text-muted-foreground">
             全站汇总口径{updatedAt ? ` · 更新于 ${updatedAt}` : ''}
-            {stats.isError ? ' · 暂时不可用' : ''}
           </p>
         </div>
 
+        {stats.isError && (
+          <div role="alert" className="mb-4 flex items-center gap-3 text-sm text-destructive">
+            <span>{data ? '统计刷新失败' : '统计暂时不可用'}</span>
+            <Button size="sm" variant="outline" disabled={stats.isFetching} onClick={() => void stats.refetch()}>重试</Button>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 lg:grid-cols-5">
-          <Stat label="累计解析歌曲" value={`${formatCount(data?.parsedSongs ?? 0)} 首`} loading={loading} />
-          <Stat label="总播放时长" value={formatTotalDuration(data?.playDurationMs ?? 0)} loading={loading} />
-          <Stat label="使用人数" value={`${formatCount(data?.listeners ?? 0)} 人`} loading={loading} />
-          <Stat label="累计播放" value={`${formatCount(data?.plays ?? 0)} 次`} loading={loading} />
-          <Stat label="生成链接" value={`${formatCount(data?.generatedLinks ?? 0)} 个`} loading={loading} wide />
+          <Stat label="累计解析歌曲" value={data?.parsedSongs == null ? '—' : `${formatCount(data.parsedSongs)} 首`} loading={loading} />
+          <Stat label="总播放时长" value={data?.playDurationMs == null ? '—' : formatTotalDuration(data.playDurationMs)} loading={loading} />
+          <Stat label="使用人数" value={data?.listeners == null ? '—' : `${formatCount(data.listeners)} 人`} loading={loading} />
+          <Stat label="累计播放" value={data?.plays == null ? '—' : `${formatCount(data.plays)} 次`} loading={loading} />
+          <Stat label="生成链接" value={data?.generatedLinks == null ? '—' : `${formatCount(data.generatedLinks)} 个`} loading={loading} wide />
         </div>
       </section>
 
@@ -119,19 +132,33 @@ export function AboutView() {
           <CardHeader className="pb-2"><CardTitle className="text-[15px]">构建信息</CardTitle></CardHeader>
           <CardContent>
             <Row label="前端版本"><span className="font-mono text-[12.5px]">{__APP_VERSION__}</span></Row>
-            <Row label="播放后端"><span className="font-mono text-[12.5px]">{capabilities?.backend ?? '—'}</span></Row>
+            <Row label="播放后端"><span className="font-mono text-[12.5px]">{capabilities?.backend ?? capabilityUnknown}</span></Row>
             <Row label="无损音源">
-              <Badge variant={capabilities?.mp3Only ? 'outline' : 'success'}>
-                {capabilities?.mp3Only ? '当前部署不支持' : '可用'}
-              </Badge>
+              {typeof capabilities?.mp3Only === 'boolean' ? (
+                <Badge variant={capabilities.mp3Only ? 'outline' : 'success'}>
+                  {capabilities.mp3Only ? '当前部署不支持' : '可用'}
+                </Badge>
+              ) : capabilityUnknown}
             </Row>
             <Row label="私有音频缓存">
-              <Badge variant={capabilities?.privateCache ? 'success' : 'outline'}>
-                {capabilities?.privateCache ? '已启用' : '未启用'}
-              </Badge>
+              {typeof capabilities?.privateCache === 'boolean' ? (
+                <Badge variant={capabilities.privateCache ? 'success' : 'outline'}>
+                  {capabilities.privateCache ? '已启用' : '未启用'}
+                </Badge>
+              ) : capabilityUnknown}
             </Row>
+            {capabilityQuery.isError && (
+              <div role="alert" className="flex items-center justify-between gap-3 py-2 text-sm text-destructive">
+                <span>播放配置获取失败</span>
+                <Button size="sm" variant="outline" disabled={capabilityQuery.isFetching} onClick={() => void capabilityQuery.refetch()}>重试</Button>
+              </div>
+            )}
             <Row label="服务状态">
-              {DEGRADE_LABELS[health?.degradeMode ?? 'normal'] ?? health?.degradeMode ?? '—'}
+              <span className="flex flex-wrap items-center justify-end gap-2">
+                {healthQuery.isError ? <span role="alert" className="text-destructive">暂时不可用</span>
+                  : health?.degradeMode ? DEGRADE_LABELS[health.degradeMode] ?? health.degradeMode : healthUnknown}
+                {healthQuery.isError && <Button size="sm" variant="outline" disabled={healthQuery.isFetching} onClick={() => void healthQuery.refetch()}>重试</Button>}
+              </span>
             </Row>
           </CardContent>
         </Card>
@@ -157,13 +184,9 @@ export function AboutView() {
         </Card>
       </div>
 
-      {/* 平台能力矩阵：把「支持到什么程度」写死在页面上，而不是让用户试出来 */}
       <Card className="shadow-[var(--shadow-card)]">
         <CardHeader className="pb-2">
           <CardTitle className="text-[15px]">平台支持范围</CardTitle>
-          <p className="text-[12.5px] text-muted-foreground">
-            账号接入指扫码或凭据登录；没有账号接入的平台也就没有个人歌单、收藏与播放记录。
-          </p>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <table className="w-full min-w-[38rem] border-collapse text-[12.5px]">

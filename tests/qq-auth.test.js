@@ -3,9 +3,10 @@ const assert = require('node:assert/strict');
 
 const qqmusic = require('../lib/qqmusic');
 
-function createMockResponse({ text = '', setCookies = [], location = null }) {
+function createMockResponse({ text = '', setCookies = [], location = null, status = 200 }) {
   return {
-    ok: true,
+    ok: status >= 200 && status < 300,
+    status,
     headers: {
       getSetCookie: () => setCookies,
       get: (name) => (String(name).toLowerCase() === 'location' ? location : null),
@@ -73,7 +74,7 @@ test('buildQQAvatarUrl 生成稳定的 QQ 头像地址', () => {
   );
 });
 
-test('checkQRCode 在成功响应中回填 uin（来自 redirect URL）', async () => {
+test('checkQRCode requires music authorization after QR confirmation, even with a confirmed redirect UIN', async () => {
   const originalFetch = global.fetch;
   let callCount = 0;
 
@@ -89,19 +90,18 @@ test('checkQRCode 在成功响应中回填 uin（来自 redirect URL）', async 
       return createMockResponse({ text: '' });
     }
 
+    if (callCount === 3) return createMockResponse({ status: 403 });
+
     throw new Error('unexpected fetch call');
   };
 
   try {
-    const result = await qqmusic.checkQRCode('mock-qrsig');
-    assert.equal(result.code, 0);
-    assert.equal(result.uin, '1503255237');
-    assert.equal(result.nickname, '啊咩啊咩！');
+    await assert.rejects(qqmusic.checkQRCode('mock-qrsig'), error => error.status === 401);
   } finally {
     global.fetch = originalFetch;
   }
 
-  assert.equal(callCount, 2);
+  assert.equal(callCount, 3);
 });
 
 test('checkQRCode 对无法解析的响应返回 code=-1', async () => {
@@ -115,6 +115,101 @@ test('checkQRCode 对无法解析的响应返回 code=-1', async () => {
     assert.equal(result.message, '解析响应失败');
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test('checkQRCode rejects redirects outside the QQ authorization endpoints before sending cookies', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return createMockResponse({
+      text: "ptuiCB('0','0','https://example.com/steal','0','登录成功', 'User')",
+      setCookies: ['uin=12345; Path=/', 'qm_keyst=fixture; Path=/'],
+    });
+  });
+  await assert.rejects(qqmusic.checkQRCode('registered-qr'), error => error.status === 401);
+  assert.equal(calls, 1);
+});
+
+test('checkQRCode follows the full authorization chain and sends cookies only to their scoped domains', async t => {
+  const visited = [];
+  t.mock.method(globalThis, 'fetch', async (input, options) => {
+    const url = new URL(input);
+    const cookie = options.headers.Cookie || '';
+    visited.push(url.href);
+    assert.equal(options.redirect, 'manual');
+    if (url.pathname === '/ptqrlogin') {
+      assert.equal(cookie, 'qrsig=registered-qr');
+      return createMockResponse({
+        text: "ptuiCB('0','0','https://ssl.ptlogin2.graph.qq.com/check_sig?uin=12345','0','登录成功','User')",
+        setCookies: ['uin=12345; Domain=.qq.com; Path=/; Secure', 'pt_local=private; Path=/; Secure'],
+      });
+    }
+    assert.match(cookie, /uin=12345/);
+    assert.doesNotMatch(cookie, /pt_local|qrsig=/);
+    if (url.pathname === '/check_sig') {
+      return createMockResponse({ status: 302, location: 'https://graph.qq.com/oauth2.0/login_jump',
+        setCookies: ['p_skey=graph-key; Domain=.graph.qq.com; Path=/; Secure'] });
+    }
+    if (url.pathname === '/oauth2.0/login_jump') return createMockResponse({});
+    if (url.pathname === '/oauth2.0/authorize') {
+      assert.match(cookie, /p_skey=graph-key/);
+      return createMockResponse({ status: 302, location: '/oauth2.0/continue',
+        setCookies: ['graph_only=private; Path=/oauth2.0; Secure', 'wrong_path=private; Path=/different',
+          'forged=private; Domain=y.qq.com; Path=/'] });
+    }
+    if (url.pathname === '/oauth2.0/continue') {
+      assert.match(cookie, /graph_only=private/);
+      assert.doesNotMatch(cookie, /wrong_path|forged/);
+      return createMockResponse({ status: 302, location: 'https://y.qq.com/cgi-bin/musicu.fcg?code=fixture' });
+    }
+    if (url.hostname === 'y.qq.com') {
+      assert.doesNotMatch(cookie, /p_skey|graph_only|wrong_path|forged/);
+      return createMockResponse({ setCookies: ['qm_keyst=music-key; Domain=.y.qq.com; Path=/; Secure'] });
+    }
+    assert.fail('unexpected authorization destination');
+  });
+  const result = await qqmusic.checkQRCode('registered-qr');
+  assert.equal(result.code, 0);
+  assert.equal(result.uin, '12345');
+  assert.equal(qqmusic.extractMusicKey(result.cookie), 'music-key');
+  assert.doesNotMatch(result.cookie, /p_skey|graph_only|pt_local|forged/);
+  assert.equal(visited.filter(url => url.includes('/oauth2.0/authorize')).length, 1);
+  assert.equal(visited.at(-1), 'https://y.qq.com/cgi-bin/musicu.fcg?code=fixture');
+});
+
+test('music authorization rejects unsafe callback redirects before requesting them', async t => {
+  for (const location of ['https://evil.test/callback', 'http://y.qq.com/callback',
+    'https://user:password@y.qq.com/callback', 'https://y.qq.com:8443/callback', 'https://y.qq.com.evil.test/callback']) {
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async (_input, options) => {
+      calls++;
+      assert.equal(options.redirect, 'manual');
+      if (calls === 1) return createMockResponse({
+        text: "ptuiCB('0','0','','0','登录成功','User')",
+        setCookies: ['uin=12345; Domain=.qq.com; Path=/'],
+      });
+      if (calls === 2) return createMockResponse({ status: 302, location });
+      assert.fail('unsafe callback must not be requested');
+    });
+    await assert.rejects(qqmusic.checkQRCode('registered-qr'), error => error.status === 401);
+    assert.equal(calls, 2);
+  }
+});
+
+test('music authorization stops redirect loops and chains beyond the hop limit', async t => {
+  for (const repeat of [true, false]) {
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async input => {
+      calls++;
+      if (calls === 1) return createMockResponse({
+        text: "ptuiCB('0','0','','0','登录成功','User')",
+        setCookies: ['uin=12345; Domain=.qq.com; Path=/'],
+      });
+      return createMockResponse({ status: 302, location: repeat ? String(input) : `https://graph.qq.com/hop/${calls}` });
+    });
+    await assert.rejects(qqmusic.checkQRCode('registered-qr'), error => error.status === 401);
+    assert.equal(calls, repeat ? 2 : 7);
   }
 });
 

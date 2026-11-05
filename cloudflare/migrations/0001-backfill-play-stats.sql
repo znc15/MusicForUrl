@@ -1,3 +1,4 @@
+-- 历史迁移，仅用于旧版本追溯与回归夹具。当前安装/升级统一执行 npm run db:migrate -- --local 或 --remote。
 -- 一次性回填：把旧版逐事件表 play_logs 聚合成 play_stats。
 --
 -- 执行顺序（重要）：

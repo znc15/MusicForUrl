@@ -1,23 +1,12 @@
 import { create } from 'zustand';
+import { clearAccountQueries } from '../lib/query-client';
+import { usePlayer } from './player';
 import { api } from '../lib/api';
 import { ACCOUNT_PLATFORMS, PLATFORM_IDS } from '../lib/platforms';
 import { clearToken, readToken, writeToken } from '../lib/storage';
 import { activeAccount, readAccounts, removeAccount, upsertAccount, writeAccounts } from '../lib/workspace-rules';
 import type { AccountUser, Platform } from '../lib/types';
 
-/**
- * 多账号模型。
- *
- * 数据归属的规则只有一条，而且由服务端保证：**一切个人数据都以账号为单位**。
- * `favorites`、`play_stats`、`playlists` 的主键第一列都是 users.id，而 users.id
- * 唯一对应 (platform, platform_user_id)，所以换账号就等于换一份数据，不存在串号。
- *
- * 浏览器这边只需要记住「每个平台当前生效的是哪个账号的令牌」：
- *   - 生效令牌写在与旧版逐字节一致的 `token` / `qqToken` 键里，请求头也照旧；
- *   - `mfu:accounts` 是新增的登记表，额外记住本机登录过的其它账号，支持一键切回。
- *
- * 因此这里不做任何数据合并：切换账号后看到的就是那个账号自己的歌单、收藏与记录。
- */
 export interface AccountRecord {
   platform: Platform;
   userId: string;
@@ -47,9 +36,24 @@ interface AuthState {
 const emptyTokens = () => Object.fromEntries(PLATFORM_IDS.map(id => [id, ''])) as Record<Platform, string>;
 const emptyUsers = () => Object.fromEntries(PLATFORM_IDS.map(id => [id, null])) as Record<Platform, AccountUser | null>;
 
+function initialAccounts(): AccountRecord[] {
+  try { return readAccounts(localStorage) as AccountRecord[]; } catch { return []; }
+}
+
 function initialTokens(): Record<Platform, string> {
   const tokens = emptyTokens();
   for (const item of ACCOUNT_PLATFORMS) tokens[item.id] = readToken(item.id);
+  // 旧版只给网易/QQ 分键；有明确登记归属时迁移共享键中的活动会话。
+  const misplaced = initialAccounts().find(item => item.token === tokens.netease
+    && (item.platform === 'kugou' || item.platform === 'kuwo'));
+  if (misplaced) {
+    if (!tokens[misplaced.platform]) {
+      tokens[misplaced.platform] = misplaced.token;
+      writeToken(misplaced.platform, misplaced.token);
+    }
+    tokens.netease = '';
+    clearToken('netease');
+  }
   return tokens;
 }
 
@@ -76,8 +80,18 @@ function isUnauthorized(error: unknown): boolean {
 }
 
 export const useAuth = create<AuthState>((set, get) => {
-  /** 令牌失效时把该平台彻底清干净：令牌、资料、登记表里的对应条目 */
+  const pending = new Map<Platform, { token: string; controller: AbortController; promise: Promise<AccountUser | null> }>();
+  let bootstrap: Promise<void> | null = null;
+
+  function invalidate(platform: Platform) {
+    pending.get(platform)?.controller.abort();
+    pending.delete(platform);
+    clearAccountQueries(platform);
+    if (usePlayer.getState().platform === platform) usePlayer.getState().clear();
+  }
+
   function drop(platform: Platform, userId?: string) {
+    invalidate(platform);
     clearToken(platform);
     set(state => ({
       tokens: { ...state.tokens, [platform]: '' },
@@ -87,12 +101,11 @@ export const useAuth = create<AuthState>((set, get) => {
   }
 
   return {
-    tokens: initialTokens(),
-    users: emptyUsers(),
-    accounts: readAccounts(localStorage) as AccountRecord[],
-    ready: false,
+    tokens: initialTokens(), users: emptyUsers(),
+    accounts: initialAccounts(), ready: false,
 
     adopt(platform, token, user) {
+      invalidate(platform);
       writeToken(platform, token);
       set(state => ({
         tokens: { ...state.tokens, [platform]: token },
@@ -103,53 +116,69 @@ export const useAuth = create<AuthState>((set, get) => {
 
     async switchTo(platform, userId) {
       const record = get().accounts.find(item => item.platform === platform && item.userId === userId);
-      if (!record) return { ok: false, message: '本机没有这个账号的登录信息，请重新登录' };
+      if (!record) return { ok: false, message: '请重新登录这个账号' };
+      invalidate(platform);
       writeToken(platform, record.token);
       set(state => ({
         tokens: { ...state.tokens, [platform]: record.token },
         users: { ...state.users, [platform]: null },
       }));
       const user = await get().refresh(platform);
-      if (!user) return { ok: false, message: '这个账号的登录状态已失效，请重新登录' };
-      // 切回来的账号排到最前
-      set(state => ({ accounts: persist(upsertAccount(state.accounts, record)) }));
-      return { ok: true };
+      if (get().tokens[platform] !== record.token) return { ok: false, message: '账号已切换' };
+      return user ? { ok: true } : { ok: false, message: '未能验证账号，请重试或重新登录' };
     },
 
     async logout(platform) {
-      const active = activeAccount(get().accounts, platform, get().tokens[platform]);
-      try { await api.logout(platform); } catch { /* 本地状态仍要清掉 */ }
+      const token = get().tokens[platform];
+      const active = activeAccount(get().accounts, platform, token);
       drop(platform, active?.userId);
+      try { await api.logout(platform, token); } catch { /* 本地已退出，旧 token 仍由服务端有效期限制 */ }
     },
 
     forget(platform, userId) {
-      set(state => ({ accounts: persist(removeAccount(state.accounts, platform, userId)) }));
+      const active = activeAccount(get().accounts, platform, get().tokens[platform]);
+      if (active?.userId === userId) drop(platform, userId);
+      else set(state => ({ accounts: persist(removeAccount(state.accounts, platform, userId)) }));
     },
 
-    async refresh(platform) {
+    refresh(platform) {
       const token = get().tokens[platform];
-      if (!token) {
-        set(state => ({ users: { ...state.users, [platform]: null } }));
-        return null;
-      }
-      try {
-        const status = await api.authStatus(platform);
-        const user = status.logged && status.user ? status.user : null;
-        set(state => ({
-          users: { ...state.users, [platform]: user },
-          accounts: user ? persist(upsertAccount(state.accounts, recordFrom(platform, token, user))) : state.accounts,
-        }));
-        return user;
-      } catch (error) {
-        // 401 说明令牌已失效，直接清掉，避免一直带着坏令牌请求
-        if (isUnauthorized(error)) drop(platform, activeAccount(get().accounts, platform, token)?.userId);
-        return null;
-      }
+      if (!token) return Promise.resolve(null);
+      const existing = pending.get(platform);
+      if (existing?.token === token) return existing.promise;
+      existing?.controller.abort();
+      const controller = new AbortController();
+      const current = () => !controller.signal.aborted && get().tokens[platform] === token;
+      const promise = (async () => {
+        try {
+          const status = await api.authStatus(platform, { token, signal: controller.signal });
+          if (!current()) return null;
+          const user = status.logged && status.user ? { ...status.user, platform } : null;
+          if (!user) {
+            drop(platform, activeAccount(get().accounts, platform, token)?.userId);
+            return null;
+          }
+          set(state => ({
+            users: { ...state.users, [platform]: user },
+            accounts: persist(upsertAccount(state.accounts, recordFrom(platform, token, user))),
+          }));
+          return user;
+        } catch (error) {
+          if (current() && isUnauthorized(error)) drop(platform, activeAccount(get().accounts, platform, token)?.userId);
+          return null;
+        } finally {
+          if (pending.get(platform)?.controller === controller) pending.delete(platform);
+        }
+      })();
+      pending.set(platform, { token, controller, promise });
+      return promise;
     },
 
-    async refreshAll() {
-      await Promise.all(ACCOUNT_PLATFORMS.map(item => get().refresh(item.id)));
-      set({ ready: true });
+    refreshAll() {
+      if (get().ready) return Promise.resolve();
+      bootstrap ??= Promise.all(ACCOUNT_PLATFORMS.map(item => get().refresh(item.id)))
+        .then(() => { set({ ready: true }); });
+      return bootstrap;
     },
   };
 });

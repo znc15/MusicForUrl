@@ -1,7 +1,7 @@
 name: Project website
 on:
   push:
-    branches: [codex/cloudflare]
+    branches: [master]
     paths:
       - website/**
       - README.md
@@ -11,7 +11,7 @@ on:
       - .github/assets/**
       - .github/workflows/website.yml
   pull_request:
-    branches: [codex/cloudflare]
+    branches: [master]
     paths: [website/**, README.md, cloudflare/README.md, cloudflare/ANIMATION.md, web/public/brand.svg, .github/workflows/website.yml]
   workflow_dispatch:
 permissions:
@@ -43,7 +43,7 @@ jobs:
         with:
           path: website/.vitepress/dist
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/cloudflare'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     needs: build
     runs-on: ubuntu-latest
     environment:

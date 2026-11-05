@@ -1,11 +1,10 @@
 import * as React from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
-  CheckCircle2, Info, LogOut, RefreshCw, ShieldCheck, Trash2, UserRoundPlus, Users,
+  CheckCircle2, LogOut, RefreshCw, ShieldCheck, Trash2, UserRoundPlus, Users,
 } from 'lucide-react';
 import { cn, imageSrc } from '@/lib/utils';
-import { ACCOUNT_PLATFORMS, PLATFORMS, platformInfo } from '@/lib/platforms';
+import { ACCOUNT_PLATFORMS, platformInfo } from '@/lib/platforms';
 import { readAccountPreferences, writeAccountPreferences } from '@/lib/workspace-rules';
 import type { AccountUser, Platform } from '@/lib/types';
 import { Button } from '@/components/ui/button';
@@ -36,10 +35,9 @@ function AccountAnnotation({ platform, user }: { platform: Platform; user: Accou
 
   return (
     <form className="mt-1 flex flex-col gap-3 border-t border-border pt-4" onSubmit={save}>
-      <p className="text-[11.5px] text-muted-foreground">本机备注 · 不会同步，也不修改平台资料</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`name-${platform}-${user.userId}`}>名称</Label>
+          <Label htmlFor={`name-${platform}-${user.userId}`}>本机名称</Label>
           <Input
             id={`name-${platform}-${user.userId}`}
             value={value.name}
@@ -49,7 +47,7 @@ function AccountAnnotation({ platform, user }: { platform: Platform; user: Accou
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`remark-${platform}-${user.userId}`}>备注</Label>
+          <Label htmlFor={`remark-${platform}-${user.userId}`}>本机备注</Label>
           <Input
             id={`remark-${platform}-${user.userId}`}
             value={value.remark}
@@ -98,7 +96,6 @@ function AccountCard({ platform }: { platform: Platform }) {
   const switchTo = useAuth(state => state.switchTo);
   const forget = useAuth(state => state.forget);
   const openLogin = useUi(state => state.openLogin);
-  const queryClient = useQueryClient();
   const [busy, setBusy] = React.useState(false);
   const info = platformInfo(platform);
 
@@ -109,8 +106,6 @@ function AccountCard({ platform }: { platform: Platform }) {
     setBusy(true);
     try {
       await action();
-      // 数据是按账号隔离的，换账号后所有列表都要重新取
-      await queryClient.invalidateQueries();
       toast.success(done);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '操作失败');
@@ -134,7 +129,7 @@ function AccountCard({ platform }: { platform: Platform }) {
           <AccountIdentity user={user} active={!!token} />
         ) : (
           <p className="text-[13px] text-muted-foreground">
-            登录后可以生成链接、收藏歌单并查看播放记录。同一平台登录新账号会切换数据，旧账号的收藏与记录仍然保留在它自己名下。
+            {info.library ? '登录后查看你的歌单、收藏和播放记录。' : '可登录音乐账号，也可直接前往首页生成公开歌单链接。'}
           </p>
         )}
 
@@ -156,7 +151,7 @@ function AccountCard({ platform }: { platform: Platform }) {
                 variant="ghost"
                 size="sm"
                 disabled={!token || busy}
-                onClick={() => void run(async () => { await refresh(platform); }, '已刷新账号状态')}
+                onClick={() => void run(async () => { if (!await refresh(platform)) throw new Error('未能验证账号，请重试或重新登录'); }, '已刷新账号状态')}
               >
                 <ShieldCheck />刷新状态
               </Button>
@@ -216,43 +211,17 @@ function AccountCard({ platform }: { platform: Platform }) {
   );
 }
 
-function GuestPlatformCard({ platform }: { platform: Platform }) {
-  const info = platformInfo(platform);
-  return (
-    <Card className="shadow-[var(--shadow-card)]">
-      <CardHeader className="flex-row items-center justify-between gap-3 pb-3">
-        <CardTitle className="text-[15px]">{info.label}</CardTitle>
-        <Badge variant="outline">免登录</Badge>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="text-[13px] text-muted-foreground">{info.note}</p>
-        <ul className="flex flex-col gap-1.5 text-[12.5px]">
-          <li className="flex items-center gap-2 text-muted-foreground">
-            <CheckCircle2 className="size-3.5 text-success" />歌单解析与音源播放：可用，无需登录
-          </li>
-          <li className="flex items-center gap-2 text-muted-foreground">
-            <Info className="size-3.5" />账号接入：未实现，因此没有个人歌单、收藏与播放记录
-          </li>
-        </ul>
-      </CardContent>
-    </Card>
-  );
-}
-
 export function AccountsView() {
   return (
     <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-5">
       <PageHeader
         eyebrow="Accounts"
         title="账号管理"
-        description="Cookie 在服务端加密保存。每个平台可以记住多个账号，同一时间只有一个生效。"
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
         {ACCOUNT_PLATFORMS.map(item => <AccountCard key={item.id} platform={item.id} />)}
-        {PLATFORMS.filter(item => !item.account).map(item => (
-          <GuestPlatformCard key={item.id} platform={item.id} />
-        ))}
+
       </div>
     </div>
   );

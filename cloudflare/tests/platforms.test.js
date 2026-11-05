@@ -10,6 +10,7 @@ import { adapter, parsePlaylistId, validPlaylistId, validSongId } from '../src/p
 import { PLATFORMS, capabilityMatrix, guestUser, platformFromPath } from '../src/platforms.js';
 import { routeKey } from '../src/telemetry.js';
 import { readSiteStats, refreshSiteStats } from '../src/stats.js';
+import { upstreamRequest } from '../src/upstream/request.js';
 
 const KUGOU_HASH = 'F460C7B867DCC5F49A0FB9574954CFD7';
 const KUGOU_320 = 'EEE71C794B070253D4A51EF8D14FA42F';
@@ -481,4 +482,56 @@ test('telemetry classifies every platform prefix', () => {
   assert.equal(routeKey('/api/kugou/song/t/hash.mp3'), 'song.segment');
   assert.equal(routeKey('/api/stats'), 'stats');
   assert.equal(routeKey('/api/unknown'), 'other');
+});
+
+test('upstream deadlines include stalled response bodies and cancel the reader', async t => {
+  let cancelled = false;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.ok(options.signal instanceof AbortSignal);
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{')); },
+      cancel() { cancelled = true; },
+    }));
+  });
+  await assert.rejects(upstreamRequest('https://example.test/', {}, { timeoutMs: 10 }),
+    error => error.status === 504 && /超时/.test(error.message));
+  assert.equal(cancelled, true);
+});
+
+test('upstream body limits measure actual bytes and preserve valid responses and cookies', async t => {
+  let cancelled = 0;
+  let response;
+  t.mock.method(globalThis, 'fetch', async () => response);
+  for (const declared of [undefined, '1', '100']) {
+    response = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(17)); },
+      cancel() { cancelled++; },
+    }), { headers: declared ? { 'content-length': declared } : {} });
+    await assert.rejects(upstreamRequest('https://example.test/', {}, { maxBytes: 16 }), error => error.status === 502);
+  }
+  assert.equal(cancelled, 3);
+  response = new Response('{"ok":true}', { headers: { 'set-cookie': 'anon=fixture; Path=/', 'content-type': 'application/json' } });
+  const valid = await upstreamRequest('https://example.test/');
+  assert.deepEqual(await valid.json(), { ok: true });
+  assert.match(valid.headers.get('set-cookie'), /anon=fixture/);
+  response = new Response(new ReadableStream({ cancel() { cancelled++; } }), { headers: { 'set-cookie': 'anon=header-only' } });
+  const headerOnly = await upstreamRequest('https://example.test/', {}, { headersOnly: true });
+  assert.equal(headerOnly.body, null);
+  assert.equal(cancelled, 4);
+});
+
+test('upstream calls respect a caller deadline without retrying login operations', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', (_url, options) => {
+    calls++;
+    return new Promise((_resolve, reject) => {
+      if (options.signal.aborted) reject(options.signal.reason);
+      else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+    });
+  });
+  const controller = new AbortController();
+  const pending = upstreamRequest('https://example.test/login', { method: 'POST', signal: controller.signal });
+  controller.abort();
+  await assert.rejects(pending, error => error.status === 504);
+  assert.equal(calls, 1);
 });

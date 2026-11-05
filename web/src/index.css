@@ -14,12 +14,12 @@
   --card-foreground: #123043;
   --popover: #ffffff;
   --popover-foreground: #123043;
-  --primary: #2f9fd0;
+  --primary: #147ba6;
   --primary-foreground: #ffffff;
   --secondary: #eaf4fa;
   --secondary-foreground: #14506c;
   --muted: #eaf4fa;
-  --muted-foreground: #6288a0;
+  --muted-foreground: #4e7085;
   --accent: #eaf5fc;
   --accent-foreground: #14506c;
   --destructive: #c2453f;
@@ -38,11 +38,11 @@
   /* 首页横幅：品牌色最集中的地方，两个主题共用同一套渐变方向 */
   --hero-from: #12384f;
   --hero-mid: #17536f;
-  --hero-to: #2a89b4;
+  --hero-to: #1b5d7a;
   --hero-foreground: #eaf7ff;
-  --hero-muted: #a8d6ea;
+  --hero-muted: #d3e9f3;
   --hero-field: rgb(255 255 255 / 97%);
-  --hero-field-foreground: #6d93a8;
+  --hero-field-foreground: #4e7085;
   --hero-seg: rgb(4 26 38 / 42%);
   --hero-seg-foreground: #9cc6db;
 
@@ -79,11 +79,11 @@
 
   --hero-from: #0e2c3f;
   --hero-mid: #14506c;
-  --hero-to: #1f7ba6;
+  --hero-to: #1b5d7a;
   --hero-foreground: #eaf7ff;
-  --hero-muted: #9cc6db;
+  --hero-muted: #d3e9f3;
   --hero-field: rgb(255 255 255 / 96%);
-  --hero-field-foreground: #6d93a8;
+  --hero-field-foreground: #4e7085;
   --hero-seg: rgb(3 18 27 / 55%);
   --hero-seg-foreground: #9cc6db;
 
@@ -128,6 +128,9 @@
   * { border-color: var(--border); }
 
   html, body, #root { height: 100%; }
+  #root { height: 100dvh; }
+  html { color-scheme: light; }
+  html[data-theme="dark"] { color-scheme: dark; }
 
   body {
     margin: 0;

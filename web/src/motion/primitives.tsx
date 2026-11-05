@@ -78,26 +78,38 @@ export function Segmented<T extends string>({
   const hero = tone === 'hero';
   return (
     <div
-      role="tablist"
+      role="radiogroup"
       aria-label={ariaLabel}
       // w-fit 而不是靠父级：否则在 flex-col 容器里会被 align-items:stretch 拉满整行
       className={cn(
-        'inline-flex w-fit items-center gap-1 rounded-lg p-1',
+        'inline-flex max-w-full w-fit flex-wrap items-center gap-1 rounded-lg p-1',
         hero ? 'bg-[var(--hero-seg)]' : 'bg-muted',
         className,
       )}
     >
-      {options.map(option => {
+      {options.map((option, index) => {
         const active = option.value === value;
         return (
           <button
             key={option.value}
             type="button"
-            role="tab"
-            aria-selected={active}
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
+            onKeyDown={event => {
+              let next = index;
+              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % options.length;
+              else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index - 1 + options.length) % options.length;
+              else if (event.key === 'Home') next = 0;
+              else if (event.key === 'End') next = options.length - 1;
+              else return;
+              event.preventDefault();
+              onChange(options[next].value);
+              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
+            }}
             onClick={() => onChange(option.value)}
             className={cn(
-              'relative inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-[13px] font-medium',
+              'relative inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] sm:px-4 font-medium',
               'transition-colors focus-visible:outline-none focus-visible:ring-2',
               hero ? 'focus-visible:ring-white/70' : 'focus-visible:ring-ring',
               active

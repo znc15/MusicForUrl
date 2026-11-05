@@ -1,6 +1,6 @@
 # 界面动画
 
-Cloudflare 版前端是 **React + Vite**，动画由 **`motion`（framer-motion）** 承担，入口为 `web/src/motion/primitives.tsx` 与 `web/src/main.tsx` 的 `LazyMotion`。旧的 GSAP 前端保存在 `codex/nodejs-frozen` 分支，历史实现见[冻结基线](https://github.com/znc15/MusicForUrl/blob/f3830c4/public/js/motion.js)。
+Cloudflare 版前端是 **React + Vite**，动画由 **`motion`（framer-motion）** 承担，入口为 `web/src/motion/primitives.tsx` 与 `web/src/main.tsx` 的 `LazyMotion`。旧的 GSAP 前端保存在 `node` 分支，历史实现见[冻结基线](https://github.com/znc15/MusicForUrl/blob/f3830c4/public/js/motion.js)。
 
 ```tsx
 // web/src/main.tsx

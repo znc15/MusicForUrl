@@ -1,12 +1,12 @@
 import { create } from 'zustand';
-import { ACCOUNT_PLATFORMS } from '../lib/platforms';
+import { PLATFORMS } from '../lib/platforms';
 import { readPersonalPlatform, readSidebarCollapsed, writePersonalPlatform, writeSidebarCollapsed } from '../lib/storage';
 import type { Platform } from '../lib/types';
 
 /** 「我的音乐」只能选有账号能力的平台；记住的值失效时回退到网易云。 */
 function initialPersonalPlatform(): Platform {
   const remembered = readPersonalPlatform();
-  return remembered && ACCOUNT_PLATFORMS.some(item => item.id === remembered) ? remembered : 'netease';
+  return remembered && PLATFORMS.some(item => item.id === remembered && item.library) ? remembered : 'netease';
 }
 
 interface UiState {

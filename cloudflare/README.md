@@ -1,6 +1,6 @@
 # Cloudflare 免自管服务器版
 
-本指南随 `codex/cloudflare` 维护。Node.js / Docker 代码保存在 `codex/nodejs-frozen`，运行方式见[冻结基线 f3830c4 的原始文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
+本指南随 `master` 维护。Node.js / Docker 代码保存在 `node`，运行方式见[冻结基线 f3830c4 的原始文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
 
 当前主域名：[https://music.nyasakura.com/](https://music.nyasakura.com/)；根域名 [https://nyasakura.com/](https://nyasakura.com/) 与原 `workers.dev` 地址 [https://music-for-url.miaofile.workers.dev/](https://music-for-url.miaofile.workers.dev/) 暂时保留为回退。配置中的 D1 ID 和 `routes` 属于这个站点；在其他 Cloudflare 账号部署时，需要创建自己的 D1 并替换 ID，删除现有 `routes` 或改成自己的域名。先使用 `workers.dev` 地址即可，无需复制本站 SaaS/DNS 配置。
 
@@ -30,7 +30,7 @@ Cloudflare 目前建议新项目使用 Workers Static Assets；若你习惯 Page
 
 | 功能 | Cloudflare 版 |
 | --- | --- |
-| 网易云、QQ 音乐、酷狗扫码或 Cookie 登录 | 保留；网易云还支持手机验证码和密码登录；酷狗只有扫码；酷我支持账号密码 / 手机短信 |
+| 账号登录 | 网易云支持扫码、验证码、密码和 Cookie；QQ 音乐与酷狗使用扫码；酷我使用账号密码 / 手机短信 |
 | 用户歌单、链接解析、收藏、最近播放 | 保留，数据写入 D1 |
 | 轻量 M3U8 | 保留，MP3 分片通过本站流式提供，并添加 Packed Audio 的 ID3 时间戳 |
 | VIP 歌曲 | 取决于登录账号的真实权限和平台接口返回值 |
@@ -49,7 +49,9 @@ Cloudflare 仅支持 `MUSIC_QUALITY=low/medium/high` 的 MP3 音质。旧配置 
 
 ### 登录认证与请求体限制
 
-网易云登录令牌仅从 `x-token` 请求头读取，QQ 音乐仅从 `x-qq-token`、酷狗仅从 `x-kugou-token` 读取；URL 查询参数 `token` / `qqtoken` 不参与登录认证或退出登录。退出接口保留 JSON 请求体中的显式令牌兼容方式。播放链接仍使用独立的签名令牌。
+登录令牌按平台从 `x-token`、`x-qq-token`、`x-kugou-token`、`x-kuwo-token` 请求头读取。退出接口保留 JSON 请求体中的显式令牌兼容方式；播放链接使用独立签名令牌。
+
+手动 Cookie 登录仅对网易云开放，并由平台验证登录状态。QQ 音乐、酷狗和酷我的 Cookie 登录请求返回 405，请改用对应扫码、密码或短信入口。QQ 扫码会话的身份来自服务端登记的二维码确认结果，并核对换回 Cookie 的账号；昵称、头像属于补充资料。
 
 JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-Length`。流式或分块请求超过上限会被取消并返回 HTTP 413。
 
@@ -62,7 +64,17 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 
 这样做的原因：旧实现每次播放执行 3 条语句，其中裁剪语句会扫描 1,000–2,000 行，一次 30 首歌的播放约消耗 **45,000 行读取**，对免费版每天 500 万行只够约 110 次播放。改为聚合后每次播放约 450 行读取、30 行写入。
 
-**升级顺序（重要）**：`npm run db:remote`（建表，幂等）→ `npm run db:backfill`（把旧 `play_logs` 聚合成 `play_stats`，**必须在部署新版 Worker 之前执行一次**）→ `npm run db:migrate:stats`（给 `play_stats` 加 `duration_ms` 并建 `site_stats`，**同样必须在部署前执行**，否则 `recordPlayback` 会因为缺列整条失败）→ `npm run db:migrate:qr`（重建 `qr_sessions`，去掉只允许 netease/qq 的 CHECK，**必须在酷狗扫码登录上线前执行**）→ `npm run deploy`。`play_logs` 暂时保留以便回填，观察一个版本后可删除。`schema.sql` 可重复执行，不清空账号、歌单或收藏；新库直接用它即可，不需要跑迁移。
+**首次建库与旧库升级共用一个入口**。在 `cloudflare/` 目录执行：
+
+```powershell
+npm run db:migrate -- --local    # 本地开发库
+```
+
+生产升级先保存数据库导出或 D1 Time Travel bookmark，再执行 `npm run db:migrate -- --remote`；检查成功后发布 Worker。迁移以 `schema_migrations` 记录版本 `0004-unified-platform-schema`，重复执行显示 `Already applied`。
+
+迁移会扩展旧 `users.platform` 约束、保留用户 ID 和关联数据、补齐 `duration_ms`、解除旧二维码平台限制。旧事件只回填缺失的聚合键；已有 `play_stats` 行保留原计数与时长，原事件继续存于 `play_logs`。新增历史时长为 `0`，表示未知；已经存在的时长保持原值。
+
+`db:local`、`db:remote` 及旧的 backfill/stats/qr npm 命令均转入统一迁移，旧 SQL 文件仅作为历史参考。回退 Worker 版本通常可继续使用升级后的表；恢复数据库原状态时使用迁移前备份或书签。
 
 ### 站点统计
 
@@ -95,7 +107,13 @@ JSON 请求体按实际读取字节限制为 65,536 字节，不依赖 `Content-
 | `STATS_REFRESH_MINUTES` | 站点统计派生指标的最小刷新间隔 | `60` |
 | `DEPLOY_VERSION` | 写入遥测的版本标记 | 空 |
 
-降级优先级是刻意的：额度是硬上限，一旦耗尽所有人都播不了，所以余量优先留给已经在看的人。`links-only` 通过 `/api/player/capabilities` 的 `degraded` 字段让前端隐藏站内播放器（每首歌 2 次请求降到 1 次）；`shed` 只让 `/playlist/parse`、`/playlist/url`、`/playlist/generate` 返回 503 与 `Retry-After`，**已签发的 M3U8 链接继续可用**。
+`/playlist/parse`、`/playlist/url`、`/playlist/generate` 与播放器 playlist/resolve 共用每平台、每 IP 每分钟 30 次的控制请求额度。超限返回 429 和 `Retry-After`，数据库计数封顶；有效播放链接的媒体、封面和 HLS 分片保持独立。
+
+`shed` 暂停所有新播放会话签发，返回 503 与 `Retry-After`；已验证的有效 grant 可继续播放和续源。`links-only` 在能力响应中暴露降级状态。前端是否完整执行该模式需单独验收。
+
+`fresh=1` 按账号（游客按 IP）、曲目、音质执行固定 10 秒窗口一次的刷新额度；同键在途请求合并。客户端按 `Retry-After` 等待后重试。
+
+酷狗、酷我的小型上游响应有 15 秒请求与读取预算，实际响应体上限 2 MiB；酷我音源 URL 响应上限 16 KiB，酷狗歌单分页链总预算 30 秒。音频使用独立流式代理，登录和短信调用保持单次提交。
 
 遥测写入 Analytics Engine 的 `mfu_playback`（每次计入的播放一个数据点）与 `mfu_requests`（控制面请求，默认 1/10 抽样，媒体与分片请求不记）。**AE 不承载正确性**：绑定缺失、写入失败或超额都只影响分析数据，UI 读取一律走 D1。在 Dashboard 关注 Requests/day、CPU p50/p99、D1 Rows read/written 与 **R2 Class A**（冷播放每次歌单产生 30 次填充写入，未加护栏时月度额度会在月初被打满）。
 
@@ -115,7 +133,9 @@ Cloudflare 版前端位于仓库根目录的 `web/`：**React + Vite + Tailwind 
 
 `web/public/_headers` 负责静态资源的缓存策略：`/assets/*`（带内容哈希）永久缓存，其余路径（HTML 与 SPA 回退）为 `max-age=0, must-revalidate` 并额外带 **`no-transform`**——最后一个指令让 Cloudflare 边缘不改写 HTML，从而不会自动注入 Web Analytics 的 `beacon.min.js`（本站统计走自己的 Analytics Engine，不需要它）。注意 `_headers` 的规则按文件顺序应用，后面的规则会覆盖同名头，所以通配规则写在最前、具体路径写在最后，否则两个 `max-age` 会被逗号拼成无效值。
 
-账号管理连接两个平台的现有登录状态，每个平台保留一个当前登录账号。可以重新登录以切换账号、选择常用平台、退出登录，并保存本机名称和备注。名称和备注以平台及账号 ID 为键保存到浏览器；不会修改音乐平台资料，也不跨设备同步。新前端保留了旧版全部 `localStorage` 键（`token`、`qqToken`、`theme`、`generatorPlatform`、`personalPlatformTab`、`mfu:player-quality`、`mfu:account:<platform>:<userId>`），因此升级不会让已登录用户掉线。
+账号管理支持四个平台，每个平台保留一个当前活动账号，并可切回本机记住的其他账号。私人列表查询按平台和账号 ID 隔离，账号变更时取消旧请求并清理可见缓存。本机名称、备注以平台及账号 ID 保存。
+
+网易云和 QQ 的活动令牌沿用 `token`、`qqToken`；酷狗和酷我使用独立的 `kugouToken`、`kuwoToken`。主题、音量、音质与账号备注的既有存储键保持兼容。
 
 预览支持 HTTPS 媒体直链和本地视频／音频文件，以及粘贴本站生成的 `stream.m3u8` 链接。本站歌单由页面底部的常驻播放器控制，切换路由不会中断播放。本地文件使用 Object URL，不会上传。
 

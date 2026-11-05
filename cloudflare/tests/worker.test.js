@@ -14,6 +14,8 @@ import {
 } from '../src/security.js';
 import { resolvePlayerSource } from '../src/player.js';
 import { recordPlayEvent, recordRequestEvent, routeKey } from '../src/telemetry.js';
+import { rateLimited } from '../src/request-policy.js';
+import qqmusic from '../../lib/qqmusic.js';
 
 function testEnv() {
   const sqlite = new DatabaseSync(':memory:');
@@ -650,4 +652,236 @@ test('telemetry is optional, sampled and never breaks a request', async () => {
   assert.equal(routeKey('/api/qq/playlist/m3u8/x/1/stream.m3u8'), 'playlist.stream');
   assert.equal(routeKey('/api/player/resolve/555'), 'player.resolve');
   assert.equal(routeKey('/unknown'), 'other');
+});
+
+test('unsupported Cookie logins cannot replace an existing QQ, Kugou or Kuwo account', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  t.mock.method(globalThis, 'fetch', async () => { assert.fail('forged cookies must not reach upstream'); });
+  for (const [platform, cookie] of [
+    ['qq', 'uin=9001; qm_keyst=fake'], ['kugou', 'userid=9001; token=fake'], ['kuwo', 'userid=9001; sid=fake'],
+  ]) {
+    const { token, userId } = await createSession(env, platform, { userId: '9001', nickname: 'Original' }, 'original-cookie');
+    const original = env.sqlite.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    const grant = await createPlaybackToken(env, original, '123');
+    const response = await worker.fetch(new Request(`https://music.example.test/api/${platform}/auth/login/cookie`, {
+      method: 'POST', body: JSON.stringify({ cookie }),
+    }), env, { waitUntil() {} });
+    assert.equal(response.status, 405, platform);
+    assert.equal((await response.json()).success, false);
+    assert.deepEqual(env.sqlite.prepare('SELECT * FROM users WHERE id = ?').get(userId), original);
+    const request = new Request('https://music.example.test/', { headers: { [`x-${platform}-token`]: token } });
+    assert.equal((await getSessionUser(env, request, platform)).id, userId);
+    assert.equal((await getPlaybackUser(env, grant, platform, '123')).id, userId);
+  }
+});
+
+test('QQ sessions require registered QR confirmation and matching server-returned identity', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const ctx = { waitUntil() {} };
+  const key = 'trusted-qr-key';
+  const register = () => env.DB.prepare('INSERT INTO qr_sessions(platform, key_hash, expires_at_ms) VALUES (?, ?, ?)')
+    .bind('qq', keyHash, Date.now() + 60000).run();
+  const keyHash = await sha256Hex(key);
+  let result = { code: 0, cookie: 'uin=9001; qm_keyst=server-key', uin: '9001', nickname: 'QR nickname' };
+  let polls = 0;
+  t.mock.method(qqmusic, 'checkQRCode', async () => { polls++; return result; });
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('profile temporarily unavailable'); });
+  const call = () => worker.fetch(new Request(`https://music.example.test/api/qq/auth/qrcode/check?key=${key}`), env, ctx);
+  assert.equal((await call()).status, 400);
+  assert.equal(polls, 0, 'unregistered QR keys never reach provider');
+  await register();
+  const response = await call();
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.data.user.userId, '9001');
+  assert.equal(body.data.user.nickname, 'QR nickname');
+  const before = env.sqlite.prepare('SELECT * FROM users').all();
+  assert.equal((await call()).status, 400, 'consumed QR cannot create another session');
+  for (const invalid of [
+    { ...result, uin: '9002' }, { ...result, cookie: 'uin=9001; skey=only-pt-cookie' }, { ...result, uin: '' },
+  ]) {
+    result = invalid;
+    await register();
+    assert.equal((await call()).status, 401);
+    assert.deepEqual(env.sqlite.prepare('SELECT * FROM users').all(), before);
+  }
+});
+
+test('QQ Worker login traverses the real redirect exchange and rejects incomplete or unsafe music callbacks', async t => {
+  for (const scenario of ['success', 'unsafe', 'http-error', 'missing-key', 'wrong-identity']) {
+    const env = testEnv(); t.after(() => env.sqlite.close());
+    const original = await createSession(env, 'qq', { userId: '9001', nickname: 'Before' }, 'uin=9001; qm_keyst=old');
+    const before = env.sqlite.prepare('SELECT * FROM users WHERE id = ?').get(original.userId);
+    const key = `qr-${scenario}`;
+    await env.DB.prepare('INSERT INTO qr_sessions(platform,key_hash,expires_at_ms) VALUES(?,?,?)')
+      .bind('qq', await sha256Hex(key), Date.now() + 60000).run();
+    let callbackVisited = false;
+    t.mock.method(globalThis, 'fetch', async (input, options) => {
+      const url = new URL(input);
+      if (url.pathname === '/ptqrlogin') return new Response(
+        "ptuiCB('0','0','https://ssl.ptlogin2.graph.qq.com/check_sig?uin=9001','0','登录成功','QR User')", {
+          headers: { 'set-cookie': 'uin=9001; Domain=.qq.com; Path=/; Secure' },
+        });
+      if (url.pathname === '/check_sig') return new Response(null, { status: 302, headers: {
+        location: 'https://graph.qq.com/oauth2.0/login_jump', 'set-cookie': 'p_skey=graph; Domain=.graph.qq.com; Path=/',
+      } });
+      if (url.pathname === '/oauth2.0/login_jump') return new Response('ready');
+      if (url.pathname === '/oauth2.0/authorize') return new Response(null, { status: 302, headers: {
+        location: scenario === 'unsafe' ? 'https://evil.test/steal' : 'https://y.qq.com/cgi-bin/musicu.fcg?code=fixture',
+      } });
+      if (url.hostname === 'y.qq.com') {
+        callbackVisited = true;
+        assert.equal(options.redirect, 'manual');
+        assert.match(options.headers.Cookie, /uin=9001/);
+        assert.doesNotMatch(options.headers.Cookie, /p_skey/);
+        const headers = new Headers();
+        if (scenario !== 'missing-key') headers.append('set-cookie', 'qm_keyst=music; Domain=.y.qq.com; Path=/; Secure');
+        if (scenario === 'wrong-identity') headers.append('set-cookie', 'uin=9002; Domain=.y.qq.com; Path=/; Secure');
+        return new Response('callback', { status: scenario === 'http-error' ? 503 : 200, headers });
+      }
+      if (url.hostname === 'u.y.qq.com') return Response.json({ code: 0, req_0: { code: 0, data: {
+        code: 0, map_userinfo: { '9001': { uin: 9001, nick: 'Verified profile' } },
+      } } });
+      assert.fail(`unexpected request outside authorization chain: ${url.hostname}`);
+    });
+    const response = await worker.fetch(new Request(`https://music.example.test/api/qq/auth/qrcode/check?key=${key}`), env, { waitUntil() {} });
+    assert.equal(response.status, scenario === 'success' ? 200 : 401, scenario);
+    assert.equal(callbackVisited, scenario !== 'unsafe');
+    if (scenario === 'success') {
+      const body = await response.json();
+      assert.equal(body.data.user.userId, '9001');
+      const user = await getSessionUser(env, new Request('https://music.example.test/', { headers: { 'x-qq-token': body.data.token } }), 'qq');
+      assert.equal(qqmusic.extractMusicKey(await decryptCookie(env, user)), 'music');
+    } else {
+      assert.deepEqual(env.sqlite.prepare('SELECT * FROM users WHERE id = ?').get(original.userId), before);
+    }
+  }
+});
+
+test('the shared limiter caps writes after rejection and resets at the next minute', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const request = new Request('https://music.example.test/', { headers: { 'cf-connecting-ip': '192.0.2.1' } });
+  const before = env.sqlite.prepare('SELECT total_changes() AS count').get().count;
+  const results = await Promise.all(Array.from({ length: 50 }, () => rateLimited(env, request, 'auth-test', 12, { now: 60000 })));
+  assert.equal(results.filter(limited => !limited).length, 12);
+  assert.equal(env.sqlite.prepare('SELECT hits FROM rate_limits').get().hits, 12);
+  assert.equal(env.sqlite.prepare('SELECT total_changes() AS count').get().count - before, 12);
+  assert.equal(await rateLimited(env, request, 'auth-test', 12, { now: 120000 }), false);
+});
+
+test('all parsing and player control routes consume one shared budget before touching upstream', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const { user, token } = await signedInUser(env, 'netease', '1001');
+  await seedPlaylist(env, user, '654321');
+  const now = Math.floor(Date.now() / 60000) * 60000 + 1000;
+  t.mock.method(Date, 'now', () => now);
+  let upstream = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    upstream++;
+    return Response.json({ code: 200, data: [{ url: 'https://m1.music.126.net/a.mp3', br: 128000, type: 'mp3' }] });
+  });
+  const pending = [], ctx = { waitUntil(promise) { pending.push(promise); } };
+  const routes = [
+    ['/api/playlist/parse?url=654321'], ['/api/playlist/url?id=654321'],
+    ['/api/playlist/generate', { method: 'POST', body: JSON.stringify({ url: '654321' }) }],
+    ['/api/player/playlist?id=654321'], ['/api/player/resolve/555?id=654321'],
+  ];
+  const call = ([path, init = {}]) => worker.fetch(new Request(`https://music.example.test${path}`, {
+    ...init, headers: { 'x-token': token, 'cf-connecting-ip': '192.0.2.2' },
+  }), env, ctx);
+  for (let index = 0; index < 30; index++) assert.equal((await call(routes[index % routes.length])).status, 200);
+  const callsAtLimit = upstream;
+  for (const route of routes) {
+    const response = await call(route);
+    assert.equal(response.status, 429, route[0]);
+    assert.equal(response.headers.get('retry-after'), '59');
+  }
+  assert.equal(upstream, callsAtLimit);
+  assert.equal(env.sqlite.prepare("SELECT hits FROM rate_limits WHERE scope = 'netease:parse'").get().hits, 30);
+  await Promise.all(pending);
+});
+
+test('shed rejects every new player entry while valid grants can resolve and stream', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const { user, token } = await signedInUser(env, 'netease', '1001');
+  await seedPlaylist(env, user, '456789');
+  const grant = await createPlaybackToken(env, user, '456789');
+  env.DEGRADE_MODE = 'shed';
+  let fetches = 0;
+  t.mock.method(globalThis, 'fetch', async input => {
+    fetches++;
+    return String(input).includes('music.163.com')
+      ? Response.json({ code: 200, data: [{ url: 'https://m1.music.126.net/a.mp3', br: 128000, type: 'mp3' }] })
+      : new Response('audio', { headers: { 'content-length': '5', 'content-type': 'audio/mpeg' } });
+  });
+  const pending = [], ctx = { waitUntil(promise) { pending.push(promise); } };
+  const call = (path, suffix = '') => worker.fetch(new Request(`https://music.example.test/api/player/${path}?id=456789${suffix}`, {
+    headers: { 'x-token': token },
+  }), env, ctx);
+  for (const path of ['playlist', 'resolve/555', 'media/555', 'cover/555']) {
+    const response = await call(path);
+    assert.equal(response.status, 503, path);
+    assert.ok(Number(response.headers.get('retry-after')) > 0);
+  }
+  assert.equal(fetches, 0);
+  assert.equal((await call('playlist', `&grant=${grant}`)).status, 200);
+  assert.equal((await call('resolve/555', `&grant=${grant}`)).status, 200);
+  const media = await call('media/555', `&grant=${grant}`);
+  assert.equal(media.status, 200);
+  assert.equal(await media.text(), 'audio');
+  await Promise.all(pending);
+});
+
+test('forced refreshes coalesce in flight, have a shared cooldown, and recover after rejection or failure', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const { user } = await signedInUser(env, 'netease', '1001');
+  let now = Math.floor(Date.now() / 10000) * 10000 + 100;
+  t.mock.method(Date, 'now', () => now);
+  let fetches = 0, release, started;
+  const fetched = new Promise(resolve => { started = resolve; });
+  t.mock.method(globalThis, 'fetch', async () => {
+    fetches++; started();
+    await new Promise(resolve => { release = resolve; });
+    return Response.json({ code: 200, data: [{ url: 'https://m1.music.126.net/a.mp3', br: 128000, type: 'mp3' }] });
+  });
+  const first = resolvePlayerSource(env, user, '555', 'low', true);
+  await fetched;
+  const second = resolvePlayerSource(env, user, '555', 'low', true);
+  release();
+  assert.equal((await first).url, (await second).url);
+  assert.equal(fetches, 1);
+  await assert.rejects(resolvePlayerSource(env, user, '555', 'low', true), error => error.status === 429 && error.retryAfter === 10);
+  assert.equal(fetches, 1);
+  // 第二个绑定对象模拟另一个 isolate，同一 D1 仍执行刷新额度。
+  const secondEnv = { ...env, DB: { prepare: sql => env.DB.prepare(sql) } };
+  await assert.rejects(resolvePlayerSource(secondEnv, user, '555', 'low', true), error => error.status === 429);
+  now += 10000;
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('upstream offline'); });
+  await assert.rejects(resolvePlayerSource(env, user, '555', 'low', true), /upstream offline/);
+  await assert.rejects(resolvePlayerSource(env, user, '555', 'low', true), error => error.status === 429);
+  now += 10000;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ code: 200, data: [
+    { url: 'https://m1.music.126.net/b.mp3', br: 128000, type: 'mp3' },
+  ] }));
+  assert.equal((await resolvePlayerSource(env, user, '555', 'low', true)).url, 'https://m1.music.126.net/b.mp3');
+});
+
+test('a forced refresh overlapping a normal cache hit still fetches a new source', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const { user } = await signedInUser(env, 'netease', '1001');
+  const cacheKey = await sha256Hex([user.platform, user.id, '555', 'low'].join(':'));
+  await env.DB.prepare('INSERT INTO song_sources(cache_key, source_json, expires_at_ms) VALUES (?, ?, ?)')
+    .bind(cacheKey, JSON.stringify({ url: 'https://m1.music.126.net/cached.mp3' }), Date.now() + 60000).run();
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return Response.json({ code: 200, data: [{ url: 'https://m1.music.126.net/fresh.mp3', br: 128000, type: 'mp3' }] });
+  });
+  const normal = resolvePlayerSource(env, user, '555', 'low');
+  const refreshed = resolvePlayerSource(env, user, '555', 'low', true);
+  const duplicate = resolvePlayerSource(env, user, '555', 'low', true);
+  assert.equal((await normal).url, 'https://m1.music.126.net/cached.mp3');
+  assert.equal((await refreshed).url, 'https://m1.music.126.net/fresh.mp3');
+  assert.equal((await duplicate).url, 'https://m1.music.126.net/fresh.mp3');
+  assert.equal(calls, 1);
 });

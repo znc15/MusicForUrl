@@ -11,6 +11,7 @@
 // 所以用同目录下的纯 JS 实现。
 
 import { md5Hex } from './md5.js';
+import { upstreamRequest } from './request.js';
 
 const LOGIN_ORIGIN = 'https://login-user.kugou.com';
 const WEB_SALT = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt';
@@ -61,7 +62,7 @@ function webParams(extra) {
 async function call(path, params) {
   const query = { ...params, signature: signature(params) };
   const url = `${LOGIN_ORIGIN}${path}?${new URLSearchParams(query).toString()}`;
-  const response = await fetch(url, {
+  const response = await upstreamRequest(url, {
     headers: { 'user-agent': LOGIN_UA, accept: 'application/json, text/plain, */*' },
     redirect: 'follow',
   });
