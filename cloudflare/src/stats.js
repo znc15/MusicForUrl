@@ -63,7 +63,8 @@ async function readRows(env) {
   const totals = await env.DB.prepare('SELECT * FROM playback_totals WHERE id = 1').first();
   if (!totals) throw new Error('playback_totals_missing');
   Object.assign(stats, { version: 2, startedAt: totals.started_at_ms, plays: totals.plays,
-    playDurationMs: totals.duration_ms, knownDurationPlays: totals.known_duration_plays,
+    playDurationMs: totals.plays > 0 && totals.known_duration_plays === 0 ? null : totals.duration_ms,
+    knownDurationPlays: totals.known_duration_plays,
     unknownDurationPlays: totals.plays - totals.known_duration_plays,
     playSources: { player: totals.player_plays, hls: totals.hls_plays, redirect: totals.redirect_plays },
     rankingWindowDays: 30, updatedAt: Math.min(...SNAPSHOT_KEYS.map(key => times.get(key) || 0)),

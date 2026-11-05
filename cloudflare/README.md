@@ -94,11 +94,27 @@ PRAGMA foreign_key_check;
 
 - **实时累加**：`parsedSongs`（每次解析到歌单时按曲目数累加）与 `generatedLinks`（每次签发播放链接累加）。旧版前端的 `/parse` + `/url` 与新前端的 `/generate` 都会计数，批量写入一次，不进入播放路径。这两个计数器从 2.1.0 开始计数：更早的请求没有留下可精确重建的记录，因此不做估算回填。
 - **累计有效播放请求**：`plays`、`playSources` 从永久 `playback_totals` 读取，覆盖已登录账号与游客；`startedAt` 为这组指标起算时间。保留期清理不减少累计。
-- **估算播放时长**：`playDurationMs` 累加每条有效记录当时已知的曲目时长，`knownDurationPlays` / `unknownDurationPlays` 显示覆盖。未知时长以及旧歌单缓存曾填入的 180 秒默认值按未知处理；曲目信息后续变化不会改写既往估算。
+- **估算播放时长**：`playDurationMs` 累加每条有效记录当时已知的曲目时长，`knownDurationPlays` / `unknownDurationPlays` 显示覆盖。四平台适配器统一输出秒数，入事件时乘 1000。旧数组缓存中未标来源的 180 秒可能是默认值，继续按未知处理；其他有效正数保留已知，新缓存里有来源的真实 180 秒正常计入。显式 `durationKnown: false` 始终保持未知。
 - **已登录账号**：`listeners` 按 `users` 账号记录数计数，跨平台账号分别计入。
 - **30 天曲目与歌单**：`songs`、`playlists` 从近期事件按平台与 ID 去重；同曲跨歌单仅计一首。这三个派生指标在 Cron 和按 `STATS_REFRESH_MINUTES` 的惰性刷新中更新。
 
 缺失值返回 `null` 并列入 `unknown`，真实零值保留为 `0`。新派生快照使用 `site_stats` 的 `v2:songs` / `v2:playlists` / `v2:listeners`，保留旧口径行，避免部署与回退期间混算。快照按全部必需指标中最旧的时间判断新鲜度；刷新失败但有旧数据时返回 `stale: true`，首次无可用快照或数据库读取失败返回 503。`updatedAt` 对应派生快照时间，累计直接读取当前持久计数。
+
+已有播放但全部缺少时长时，API 将 `playDurationMs` 返回为 `null` 并列入 `unknown`；关于页显示“— / 暂无可估算时长”。部分已知时展示已知时长汇总及“已计入 X / Y 次”；真实零播放保持“0 分钟”，已知正时长不足一分钟显示“不足 1 分钟”。
+
+#### 旧缓存时长纠正（2.4.1）
+
+2.3.0 曾将旧数组缓存的全部时长标为未知，连真实的非 180 秒值也被排除。2.4.1 修复此判断，无需数据库结构迁移。先发布代码，停止新增同类记录，再备份生产库；历史数据仅在**事件之前已有的备份元数据**与只读观察中的缓存一致时纠正，后续新取得的曲目时长保留用于后续事件。
+
+离线工具 `cloudflare/scripts/repair-legacy-duration.mjs` 只提取备份的 `playlists` INSERT，接收不含凭据的事件/缓存证据 JSON，生成限定事件修复 SQL，并在内存 SQLite 中预演首次与重复执行：
+
+```powershell
+node cloudflare/scripts/repair-legacy-duration.mjs --backup <事件前备份.sql> --evidence <只读证据.json> --sql <待审阅修复.sql>
+```
+
+证据包含 `startedAt`、`backupBeforeMs`、明确列出的 `events` 和 `current` 缓存元数据。工具核对账号/歌单/歌曲、缓存到期值、事件时序与原秒数，排除歧义 180 秒、已知标记为 false 及未可靠匹配的记录。SQL 按事件 ID、账号、歌单、歌曲和时间精确匹配，且只更新零时长；事件和永久时长/已知次数在同一 D1 导入事务中更新。总播放数、来源计数、账号、收藏及个人 `play_stats` 保持，`playback_totals.updated_at_ms` 更新为纠正时间。重复执行无新增变化。
+
+发布负责人应在新版上线后重新取得只读事件快照、生成并审阅 SQL，再使用既有 D1 `--file` 整文件导入流程执行和核对。工具自身仅执行离线预演；预演数量随快照变化，不固定为某次截图中的播放数。
 
 公开 `/api/stats/top?limit=10` 提供 30 天全站歌曲排行（最多 50 条），按平台/歌曲合并并覆盖游客，返回 `windowDays`、`startedAt`、`since`、`updatedAt`、`stale`。边缘缓存 5 分钟，同 isolate 的冷请求合并；刷新失败最多回退 1 小时旧排行，再返回 503。个人 `/api[/qq]/history/top` 按登录账号隔离，使用独立查询；升级前的旧聚合继续用于个人历史，不回填为精确 30 天排行。
 

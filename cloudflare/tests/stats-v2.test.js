@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { recordPlayback, prunePlaybackLogs, readPlaybackRanking, readGlobalPlaybackRanking, PLAY_LOG_RETENTION_MS } from '../src/playback-history.js';
 import { readSiteStats, refreshSiteStats } from '../src/stats.js';
 import { guestUser } from '../src/platforms.js';
+import { planDurationRepair, dryRunDurationRepair } from '../scripts/repair-legacy-duration.mjs';
 
 function fixture(t) {
   const sqlite = new DatabaseSync(':memory:');
@@ -111,6 +112,88 @@ test('a fresh parsed counter cannot hide missing snapshots; real zero remains di
   assert.deepEqual(stats.unknown, ['generatedLinks']);
   assert.equal(stats.stale, false);
   assert.ok(stats.startedAt > 0 && stats.updatedAt > 0);
+});
+
+test('all-unknown durations are null in the API while a real empty ledger remains zero', async t => {
+  const env = fixture(t), account = user(env, 1);
+  assert.equal((await readSiteStats(env)).playDurationMs, 0);
+  await recordPlayback(env, account, 'p', { ...song, duration: 180, durationKnown: false });
+  const unknown = await readSiteStats(env);
+  assert.equal(unknown.plays, 1);
+  assert.equal(unknown.playDurationMs, null);
+  assert.equal(unknown.knownDurationPlays, 0);
+  assert.equal(unknown.unknownDurationPlays, 1);
+  assert.ok(unknown.unknown.includes('playDurationMs'));
+  await recordPlayback(env, account, 'another', song);
+  const partial = await readSiteStats(env);
+  assert.equal(partial.playDurationMs, 90000);
+  assert.equal(partial.knownDurationPlays, 1);
+  assert.equal(partial.unknownDurationPlays, 1);
+});
+
+function repairEvidence() {
+  const tracks = [{ id: '11', duration: 285 }, { id: '12', duration: 446 }];
+  const snapshot = { user_id: 1, playlist_id: '123', expires_at_ms: 9000, songs_json: JSON.stringify(tracks) };
+  return { snapshots: [snapshot], evidence: { startedAt: 1000, backupBeforeMs: 900,
+    events: tracks.map((track, index) => ({ id: index + 1, user_id: 1, platform: 'netease', playlist_id: '123',
+      song_id: track.id, played_at_ms: 2000 + index, duration_ms: 0 })),
+    current: [{ ...snapshot, cache_shape: 'array', tracks_json: snapshot.songs_json }],
+  } };
+}
+
+test('duration repair requires matching pre-event and unchanged cache evidence, excluding ambiguous 180s', async () => {
+  const { snapshots, evidence } = repairEvidence();
+  let plan = planDurationRepair(evidence, snapshots);
+  assert.equal(plan.candidates.length, 2);
+  assert.equal(plan.durationMs, 731000);
+  const result = await dryRunDurationRepair(evidence, plan);
+  assert.equal(result.after.plays, 2);
+  assert.equal(result.after.known_duration_plays, 2);
+  assert.equal(result.after.duration_ms, 731000);
+  assert.deepEqual(result.after, result.repeated);
+  evidence.current[0].tracks_json = JSON.stringify([{ id: '11', duration: 286 }, { id: '12', duration: 446 }]);
+  assert.deepEqual(planDurationRepair(evidence, snapshots).candidates.map(e => e.id), [2]);
+  snapshots[0].songs_json = evidence.current[0].tracks_json = JSON.stringify([{ id: '11', duration: 180 }, { id: '12', duration: 446 }]);
+  assert.deepEqual(planDurationRepair(evidence, snapshots).candidates.map(e => e.id), [2]);
+  evidence.events[1].played_at_ms = 500;
+  assert.equal(planDurationRepair(evidence, snapshots).candidates.length, 0);
+  evidence.events[1].played_at_ms = 2001;
+  evidence.current[0].expires_at_ms++;
+  assert.equal(planDurationRepair(evidence, snapshots).candidates.length, 0);
+});
+
+test('repair SQL is atomic, idempotent, and preserves new plays and unrelated event coordinates', t => {
+  const env = fixture(t), { snapshots, evidence } = repairEvidence();
+  env.sqlite.prepare('UPDATE playback_totals SET started_at_ms=?').run(evidence.startedAt);
+  const insert = env.sqlite.prepare(`INSERT INTO playback_events (id,actor_key,user_id,platform,playlist_id,song_id,duration_ms,surface,played_at_ms)
+    VALUES (?, 'fixture', ?, ?, ?, ?, ?, 'player', ?)`);
+  for (const e of evidence.events) insert.run(e.id, e.user_id, e.platform, e.playlist_id, e.song_id, e.duration_ms, e.played_at_ms);
+  insert.run(3, null, 'kuwo', '123', '11', 60000, 3000); // Concurrent new known play stays intact.
+  const sql = planDurationRepair(evidence, snapshots).sql;
+  const totals = () => ({ ...env.sqlite.prepare('SELECT plays,duration_ms,known_duration_plays FROM playback_totals').get() });
+  env.sqlite.exec('BEGIN');
+  assert.throws(() => env.sqlite.exec(sql + '\nINSERT INTO nonexistent_table VALUES (1)'), /no such table/);
+  env.sqlite.exec('ROLLBACK');
+  assert.deepEqual(totals(), { plays: 3, duration_ms: 60000, known_duration_plays: 1 });
+  assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='__mfu_repair_legacy_duration'").get().n, 0);
+  env.sqlite.exec('BEGIN'); env.sqlite.exec(sql); env.sqlite.exec('COMMIT');
+  assert.deepEqual(totals(), { plays: 3, duration_ms: 791000, known_duration_plays: 3 });
+  env.sqlite.exec('BEGIN'); env.sqlite.exec(sql); env.sqlite.exec('COMMIT');
+  assert.deepEqual(totals(), { plays: 3, duration_ms: 791000, known_duration_plays: 3 });
+  assert.equal(env.sqlite.prepare('SELECT duration_ms FROM playback_events WHERE id=3').get().duration_ms, 60000);
+});
+
+test('repair SQL refuses another ledger and skips events whose scoped coordinates changed', t => {
+  const env = fixture(t), { snapshots, evidence } = repairEvidence();
+  env.sqlite.exec("INSERT INTO playback_events (id,actor_key,user_id,platform,playlist_id,song_id,duration_ms,surface,played_at_ms) VALUES (1,'fixture',1,'netease','123','11',0,'player',2000)");
+  const sql = planDurationRepair(evidence, snapshots).sql;
+  env.sqlite.exec('BEGIN');
+  assert.throws(() => env.sqlite.exec(sql), /Unexpected playback ledger/);
+  env.sqlite.exec('ROLLBACK');
+  assert.equal(env.sqlite.prepare('SELECT duration_ms FROM playback_events WHERE id=1').get().duration_ms, 0);
+  env.sqlite.exec("UPDATE playback_totals SET started_at_ms=1000; UPDATE playback_events SET song_id='99' WHERE id=1;");
+  env.sqlite.exec('BEGIN'); env.sqlite.exec(sql); env.sqlite.exec('COMMIT');
+  assert.equal(env.sqlite.prepare('SELECT duration_ms FROM playback_totals').get().duration_ms, 0);
 });
 
 test('initial refresh failure reports 503; an incomplete old snapshot stays stale with explicit unknowns', async t => {

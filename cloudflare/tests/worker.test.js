@@ -642,6 +642,36 @@ async function seedPlaylist(env, user, playlistId = '123456') {
   ]), Date.now() + 60000).run();
 }
 
+test('real legacy duration reaches all playback surfaces and permanent SQL totals', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close()); env.MUSIC_QUALITY = 'high';
+  const media = new Uint8Array([0xff, 0xfb, 0x90, 0, 1, 2, 3, 4]);
+  t.mock.method(globalThis, 'fetch', async () => new Response(media, {
+    headers: { 'content-type': 'audio/mpeg', 'content-length': String(media.length) },
+  }));
+  for (const [i, surface] of ['player', 'hls', 'redirect'].entries()) {
+    const { user } = await signedInUser(env, 'netease', `duration-surface-${i}`);
+    const id = String(9870 + i);
+    await seedPlaylist(env, user, id); // legacy array, known 200 seconds
+    const key = await sha256Hex(`netease:${user.id}:555:high`);
+    await env.DB.prepare('INSERT INTO song_sources VALUES (?, ?, ?)').bind(key, JSON.stringify({
+      url: 'https://m1.music.126.net/duration.mp3', quality: 'high', format: 'mp3', bitrate: 320000,
+      expiresAt: Date.now() + 60000,
+    }), Date.now() + 60000).run();
+    const grant = await createPlaybackToken(env, user, id);
+    const path = surface === 'player' ? `/api/player/media/555?platform=netease&id=${id}&grant=${grant}&quality=high`
+      : `/api/song/${grant}/555.mp3?playlist=${id}${surface === 'hls' ? '&hls=1' : ''}`;
+    const tasks = [];
+    const response = await worker.fetch(new Request('https://music.example.test' + path), env, { waitUntil(task) { tasks.push(task); } });
+    assert.equal(response.status, surface === 'redirect' ? 302 : 200);
+    await response.arrayBuffer(); await Promise.all(tasks);
+    const event = env.sqlite.prepare('SELECT duration_ms,surface FROM playback_events WHERE user_id=?').get(user.id);
+    assert.equal(event.duration_ms, 200000);
+    assert.equal(event.surface, surface);
+  }
+  const totals = env.sqlite.prepare('SELECT plays,duration_ms,known_duration_plays FROM playback_totals').get();
+  assert.deepEqual({ ...totals }, { plays: 3, duration_ms: 600000, known_duration_plays: 3 });
+});
+
 test('playlist generation resolves the link in a single request', async t => {
   const env = testEnv();
   t.after(() => env.sqlite.close());

@@ -5,6 +5,7 @@ import { usePlayer } from '@/stores/player';
 import { usePlayback } from '@/stores/playback';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { CoverArt } from '@/components/playlist-card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/tabs';
 import type { QualityId } from '@/lib/types';
 
 export function PlayerTransport({ compact = false }: { compact?: boolean }) {
@@ -41,9 +42,23 @@ export function PlayerQuality() {
   const source = usePlayer(state => state.source);
   const setQuality = usePlayer(state => state.setQuality);
   const { data } = useCapabilities();
-  return <div className="player-quality"><select aria-label="音质" value={quality} onChange={event => void setQuality(event.target.value as QualityId)}>
-    {(data?.qualities ?? [{ id: quality, label: '标准', format: 'MP3', enabled: true }]).map(option => <option key={option.id} value={option.id} disabled={!option.enabled}>{option.label}{option.enabled ? '' : '（不可用）'}</option>)}
-  </select>{source && <span>{source.format.toUpperCase()} {formatBitrate(source.bitrate)}</span>}</div>;
+  const [container, setContainer] = React.useState<HTMLElement | undefined>();
+  const labels: Record<QualityId, string> = { low: '标准', medium: '较高', high: '高品质', lossless: '无损' };
+  const options = data?.qualities ?? [{ id: quality, label: labels[quality], format: source?.format.toUpperCase() ?? 'MP3', bitrate: null, enabled: true, reason: '' }];
+  const selected = options.find(option => option.id === quality);
+  return <div className="player-quality">
+    <Select value={quality} onValueChange={value => void setQuality(value as QualityId)} onOpenChange={open => {
+      if (open) setContainer(document.fullscreenElement instanceof HTMLElement ? document.fullscreenElement : undefined);
+    }}>
+      <SelectTrigger className="player-quality-trigger" aria-label="音质" title="选择音质"><SelectValue>{selected?.label ?? labels[quality]}</SelectValue></SelectTrigger>
+      <SelectContent container={container} side="top" align="end" sideOffset={10} collisionPadding={12} className="player-quality-menu" aria-label="音质选项">
+        {source && <div className="player-quality-source"><span>当前音源</span><strong>{source.format.toUpperCase()}{source.bitrate ? ` · ${formatBitrate(source.bitrate)}` : ''}</strong></div>}
+        {options.map(option => <SelectItem key={option.id} value={option.id} textValue={option.label} disabled={!option.enabled} title={!option.enabled ? option.reason : undefined} className="player-quality-option">
+          <span className="player-quality-option-text"><strong>{option.label}</strong><span>{option.enabled ? [option.format, formatBitrate(option.bitrate)].filter(Boolean).join(' · ') : '当前不可用'}</span></span>
+        </SelectItem>)}
+      </SelectContent>
+    </Select>
+  </div>;
 }
 
 export function PlayerFeedback() {

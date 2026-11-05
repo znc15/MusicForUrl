@@ -69,10 +69,12 @@ export function SelectTrigger({
 }
 
 export function SelectContent({
-  className, children, ...props
-}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>) {
+  className, children, container, ...props
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & {
+  container?: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Portal>['container'];
+}) {
   return (
-    <SelectPrimitive.Portal>
+    <SelectPrimitive.Portal container={container}>
       <SelectPrimitive.Content
         position="popper"
         sideOffset={4}

@@ -62,14 +62,35 @@
 .player-mode { color: var(--player-secondary); }
 .player-mode svg { width: 19px; height: 19px; }
 .player-mode[aria-pressed="true"] { color: var(--player-accent); background: rgb(146 217 242 / 13%); }
-.now-playing-options { display: flex; align-items: center; gap: 16px; justify-content: space-between; margin-top: 14px; }
-.player-volume { width: 44%; max-width: 170px; }
+.now-playing-options { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 0; margin-top: 18px; padding: 5px 6px; min-height: 52px; border: 1px solid rgb(255 255 255 / 13%); border-radius: 14px; background: rgb(255 255 255 / 7%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%); backdrop-filter: blur(18px); }
+.player-volume { width: 100%; min-width: 0; gap: 7px; }
+.now-playing-options .player-volume button { width: 34px; height: 40px; border-radius: 9px; }
+.now-playing-options .player-volume button:hover { background: rgb(255 255 255 / 9%); }
+.now-playing-options .player-volume [role="slider"] { min-width: 28px; height: 32px; }
+.now-playing-options .volume-value { width: 28px; flex-shrink: 0; font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; color: #d6e5ee; }
 .listening-room .player-volume button, .mini-player-volume button { color: var(--player-secondary); }
 .listening-room .player-volume [role="slider"] > span:first-child, .mini-player-volume [role="slider"] > span:first-child { background: rgb(255 255 255 / 18%); }
 .listening-room .player-volume [role="slider"] > span:nth-child(2), .mini-player-volume [role="slider"] > span:nth-child(2) { background: #d8e9f3; }
-.player-quality { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; color: var(--player-secondary); font-size: 10px; }
-.player-quality select { max-width: 115px; min-height: 32px; padding: 2px 6px; border: 0; border-radius: 6px; color: var(--player-ink); background: transparent; font-size: 12px; cursor: pointer; }
-.player-quality option { color: #f5f7fb; background: #183043; }
+.now-playing-options .player-volume [role="slider"] > span:last-child { opacity: 1; background: #edf8ff; width: 10px; height: 10px; box-shadow: 0 1px 5px rgb(0 0 0 / 20%); }
+.player-quality { display: flex; align-items: center; margin-left: 12px; padding-left: 8px; border-left: 1px solid rgb(255 255 255 / 16%); }
+.player-quality .player-quality-trigger { width: 98px; height: 40px; padding: 0 9px; gap: 9px; border: 0; border-radius: 9px; background: transparent; color: #f5f7fb; font-size: 13px; font-weight: 550; box-shadow: none; cursor: pointer; }
+.player-quality-trigger:hover, .player-quality-trigger[data-state="open"] { background: rgb(255 255 255 / 11%); }
+.player-quality-trigger > span:last-child { display: flex; }
+.player-quality-trigger[data-state="open"] > span:last-child svg { transform: rotate(180deg); }
+.player-quality-trigger svg { transition: transform .16s ease; }
+.player-quality-menu { width: 232px; max-width: calc(100vw - 24px); max-height: var(--radix-select-content-available-height); border: 1px solid rgb(220 239 255 / 20%); border-radius: 16px; padding: 3px; color: #f5f7fb; background: linear-gradient(145deg, rgb(40 58 77 / 96%), rgb(24 36 54 / 97%)); box-shadow: 0 18px 46px rgb(0 0 0 / 35%), inset 0 1px 0 rgb(255 255 255 / 8%); backdrop-filter: blur(24px) saturate(1.25); transform-origin: var(--radix-select-content-transform-origin); animation: quality-menu-in .14s ease-out; }
+.player-quality-source { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 1px 6px 6px; padding: 10px 5px 12px; border-bottom: 1px solid rgb(255 255 255 / 12%); font-size: 11px; }
+.player-quality-source > span { color: #c4d4e3; }
+.player-quality-source strong { font-weight: 500; color: #e3f0f8; }
+.player-quality-menu .player-quality-option { min-height: 53px; padding: 9px 12px; border-radius: 10px; gap: 12px; }
+.player-quality-option-text { display: flex; flex-direction: column; gap: 3px; }
+.player-quality-option-text strong { font-size: 13px; font-weight: 550; line-height: 1.4; }
+.player-quality-option-text > span { font-size: 11px; color: #c4d4e3; line-height: 1.4; }
+.player-quality-menu .player-quality-option[data-state="checked"] { background: rgb(147 212 239 / 12%); color: #d1f0ff; }
+.player-quality-menu .player-quality-option[data-highlighted] { background: rgb(255 255 255 / 12%); color: #fff; }
+.player-quality-menu .player-quality-option[data-disabled] { opacity: .55; }
+.player-quality-menu :focus-visible { outline: 2px solid #a6e2ff; outline-offset: -2px; }
+@keyframes quality-menu-in { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: none; } }
 .player-feedback { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 12px; color: #d5e5ee; font-size: 12px; line-height: 1.6; }
 .player-feedback[role="alert"] { color: #ffc2bb; }
 .player-feedback button { color: #fff; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
@@ -182,8 +203,8 @@
   .player-transport { gap: 4px; margin-block: 15px; }
   .player-transport .player-play { width: 60px; height: 60px; }
   .player-transport .player-skip { width: 42px; height: 42px; }
-  .now-playing-options { gap: 8px; }
-  .player-volume { width: 48%; }
+  .player-quality { margin-left: 8px; padding-left: 6px; }
+  .player-quality .player-quality-trigger { width: 88px; }
   .player-queue { height: min(460px,65dvh); border-radius: 16px; }
   .player-queue-heading { padding-top: 18px; }
   .player-queue-heading h2 { font-size: 19px; }
@@ -206,12 +227,15 @@
   .listening-actions .player-glass-button { width: 36px; padding: 0; }
   .listening-layout { padding-inline: 18px; }
 }
+@media (max-width: 360px) {
+  .now-playing-options .volume-value { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .player-equalizer i { animation: none; }
   .now-playing-artwork, .player-icon { transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .player-queue, .player-source-panel, .player-glass-button { background: #1c3549; backdrop-filter: none; }
+  .player-queue, .player-source-panel, .player-glass-button, .now-playing-options, .player-quality-menu { background: #1c3549; backdrop-filter: none; }
   .player-play { backdrop-filter: none; }
 }
 @supports not (backdrop-filter: blur(20px)) {

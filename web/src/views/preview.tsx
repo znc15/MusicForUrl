@@ -146,7 +146,7 @@ export function PreviewView() {
           <div className={`now-playing-artwork${status === 'playing' ? ' is-playing' : ''}`}><CoverArt src={artwork} seed={track.id} className="now-playing-cover" /></div>
           <div className="now-playing-title"><h1>{track.name}</h1><p>{track.artist || playlist.name}</p></div>
           <PlayerProgress /><PlayerTransport />
-          <div className="now-playing-options"><VolumeControl className="player-volume" /><PlayerQuality /></div>
+          <div className="now-playing-options"><VolumeControl className="player-volume" showValue /><PlayerQuality /></div>
           <PlayerFeedback />
         </> : <>
           <div className="player-empty-art" aria-hidden="true"><span /><Music2 strokeWidth={1.2} /></div>

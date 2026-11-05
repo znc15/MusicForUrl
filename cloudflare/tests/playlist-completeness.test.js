@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { adapter, buildLitePlaylist, getPlaylist } from '../src/playlists.js';
 import { createSession } from '../src/security.js';
+import policy from '../../lib/player-policy.js';
 
 const json = value => Response.json(value);
 const hash = index => index.toString(16).toUpperCase().padStart(32, '0');
@@ -164,7 +165,7 @@ test('D1 partial cache preserves metadata, expires quickly and retries to a comp
   assert.ok(env.sqlite.prepare('SELECT expires_at_ms FROM playlists').get().expires_at_ms >= before + 86400000);
 });
 
-test('old long-lived partial D1 and guest caches are refreshed; complete legacy durations stay unknown', async t => {
+test('old long-lived partial caches refresh while ambiguous legacy 180 seconds remain unknown', async t => {
   const env = testEnv(t), user = await account(env);
   const state = kugouFixture(t); state.failPage = 0;
   const legacyTracks = [{ id: hash(1), name: 'Legacy', duration: 180 }];
@@ -182,6 +183,52 @@ test('old long-lived partial D1 and guest caches are refreshed; complete legacy 
   assertCounts(await getPlaylist(env, { platform: 'kugou', guest: true }, '123'), 35, 35, null);
   entries.set('https://playlist.mfu.internal/kugou/456', json({ songCount: 1, tracks: legacyTracks }));
   assert.equal((await getPlaylist(env, { platform: 'kugou', guest: true }, '456')).tracks[0].durationKnown, false);
+});
+
+test('legacy arrays preserve real seconds across four platforms while only ambiguous or invalid values remain unknown', async t => {
+  const entries = memoryCache(t);
+  for (const platform of ['netease', 'qq', 'kugou', 'kuwo']) {
+    const env = testEnv(t), user = await account(env, platform);
+    const tracks = [285, 180, 0, 446, 180].map((duration, i) => ({
+      id: platform === 'kugou' ? hash(i + 1) : String(i + 1), duration,
+      ...(i === 3 ? { durationKnown: false } : i === 4 ? { durationKnown: true } : {}),
+    }));
+    env.sqlite.prepare('INSERT INTO playlists (user_id,playlist_id,song_count,songs_json,expires_at_ms) VALUES (?,?,?,?,?)')
+      .run(user.id, '789', tracks.length, JSON.stringify(tracks), Date.now() + 60000);
+    const playlist = await getPlaylist(env, user, '789');
+    assert.deepEqual(playlist.tracks.map(track => track.durationKnown), [true, false, false, false, true], platform);
+    assert.equal(policy.normalizedPlaylist(playlist, platform).tracks[0].duration, 285);
+    assert.equal(policy.normalizedPlaylist(playlist, platform).tracks[0].durationKnown, true);
+    if (platform === 'kugou' || platform === 'kuwo') {
+      entries.set(`https://playlist.mfu.internal/${platform}/789`, json({ songCount: tracks.length, tracks }));
+      assert.deepEqual((await getPlaylist(env, { platform, guest: true }, '789')).tracks.map(track => track.durationKnown),
+        [true, false, false, false, true]);
+    }
+  }
+});
+
+test('fresh adapter durations use seconds through v2 caches including genuine 180-second songs', async t => {
+  const durationValues = [285, 180, 0];
+  for (const platform of ['netease', 'qq', 'kugou', 'kuwo']) await t.test(platform, async t => {
+    const env = testEnv(t), user = await account(env, platform);
+    env.KUWO_COOKIE = 'kw_token=fixture';
+    t.mock.method(globalThis, 'fetch', async input => {
+      if (platform === 'netease') return json({ code: 200, playlist: { id: '123', trackCount: 3,
+        tracks: durationValues.map((n, i) => ({ id: i + 1, dt: n * 1000 })) } });
+      if (platform === 'qq') return json({ code: 0, cdlist: [{ songnum: 3,
+        songlist: [{ songmid: '1', interval: '4:45' }, { songmid: '2', interval: 180 }, { songmid: '3', interval: 0 }] }] });
+      if (platform === 'kuwo') return json({ data: { total: 3,
+        musicList: durationValues.map((n, i) => ({ rid: i + 1, duration: n })) } });
+      const info = durationValues.map((n, i) => ({ hash: hash(i + 1), duration: n }));
+      return new URL(input).hostname === 'm.kugou.com'
+        ? json({ list: { list: { total: 3, info } }, info: { list: {} } }) : json({ data: { total: 3, info } });
+    });
+    for (let i = 0; i < 2; i++) {
+      const playlist = await getPlaylist(env, user, '123');
+      assert.deepEqual(playlist.tracks.map(track => track.duration), durationValues);
+      assert.deepEqual(playlist.tracks.map(track => track.durationKnown), [true, true, false]);
+    }
+  });
 });
 
 test('QQ normalization reports missing and invalid tracks rather than claiming a complete export', async t => {

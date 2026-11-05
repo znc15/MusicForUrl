@@ -14,7 +14,7 @@ function iconFor(level: number) {
  * 状态在 `useVolume` 里，写入 localStorage，因此刷新与页面切换都不会丢。
  * 轨道支持点击定位、按住拖动、方向键微调（每次 5%）与 Home/End 跳到两端。
  */
-export function VolumeControl({ className }: { className?: string }) {
+export function VolumeControl({ className, showValue = false }: { className?: string; showValue?: boolean }) {
   const volume = useVolume(state => state.volume);
   const muted = useVolume(state => state.muted);
   const setVolume = useVolume(state => state.setVolume);
@@ -111,7 +111,7 @@ export function VolumeControl({ className }: { className?: string }) {
           style={{ left: `${percent}%` }}
         />
       </div>
-
+      {showValue && <span className="volume-value" aria-hidden="true">{percent}%</span>}
     </div>
   );
 }

@@ -77,8 +77,11 @@ function normalizedSongs(platform, tracks, legacyCache = false) {
       name: String(track?.name || ''),
       artist: String(track?.artist || ''),
       duration: Number.isFinite(Number(track?.duration)) && Number(track.duration) > 0 ? Number(track.duration) : 0,
-      // 旧缓存曾把未知时长填成 180 秒，只保留封装值，不作为统计已知时长。
-      durationKnown: !legacyCache && track?.durationKnown !== false
+      // Legacy arrays stored seconds and only substituted 180 for missing
+      // duration. Other positive values retain their original known duration;
+      // an unmarked 180 remains ambiguous until fresh metadata is available.
+      durationKnown: track?.durationKnown !== false
+        && (!legacyCache || Number(track?.duration) !== 180 || track?.durationKnown === true)
         && Number.isFinite(Number(track?.duration)) && Number(track.duration) > 0,
       cover: String(track?.cover || ''),
     }))

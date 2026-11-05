@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, ExternalLink, MinusCircle } from 'lucide-react';
 import { api } from '@/lib/api';
-import { formatCount, formatDateTime, formatTotalDuration } from '@/lib/utils';
+import { formatCount, formatDateTime } from '@/lib/utils';
+import { playbackDurationPresentation } from '@/lib/stats-presentation';
 import { PLATFORMS } from '@/lib/platforms';
 import { Badge, Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -96,6 +97,7 @@ export function AboutView() {
   const capabilityUnknown = capabilityQuery.isPending ? '加载中…' : '未知';
   const healthUnknown = healthQuery.isPending ? '加载中…' : '未知';
   const data = stats.data;
+  const duration = playbackDurationPresentation(data);
   const loading = stats.isLoading;
   const updatedAt = data?.updatedAt ? formatDateTime(new Date(data.updatedAt).toISOString()) : '';
   const startedAt = data?.startedAt ? `自 ${formatDateTime(new Date(data.startedAt).toISOString())} 起` : '';
@@ -128,8 +130,7 @@ export function AboutView() {
         )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 lg:grid-cols-5">
           <Stat label="累计解析歌曲" value={count('parsedSongs', '首')} loading={loading} />
-          <Stat label="估算播放时长" value={number('playDurationMs') == null ? '—' : formatTotalDuration(number('playDurationMs')!)} loading={loading}
-            detail={[startedAt, data?.unknownDurationPlays ? `${formatCount(data.unknownDurationPlays)} 次缺少时长` : ''].filter(Boolean).join(' · ')} />
+          <Stat label="估算播放时长" value={duration.value} loading={loading} detail={duration.detail} />
           <Stat label="已登录账号" value={count('listeners', '个')} loading={loading} />
           <Stat label="累计有效播放请求" value={count('plays', '次')} loading={loading} detail={startedAt} />
           <Stat label="生成链接" value={count('generatedLinks', '个')} loading={loading} wide />

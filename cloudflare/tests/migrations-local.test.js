@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { schema, inspectDatabase, migrationPlan, migrateDatabase, wranglerDatabase } from '../scripts/migrate.mjs';
+import { planDurationRepair } from '../scripts/repair-legacy-duration.mjs';
 
 // Explicit, isolated Wrangler integration test. Never uses the developer's
 // wrangler.jsonc, .wrangler database or a remote binding.
@@ -61,4 +62,37 @@ test('Wrangler D1 batch preserves legacy foreign-key children and rolls back fai
   assert.equal(db.query('SELECT started_at_ms FROM playback_totals')[0].started_at_ms, startedAt);
   assert.equal((await migrateDatabase(db)).changed, false);
   assert.equal(db.query('SELECT plays FROM playback_totals')[0].plays, 1);
+});
+
+test('Wrangler D1 legacy duration repair rolls back failures and preserves counters on repetition', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'mfu-duration-repair-'));
+  t.after(async () => {
+    assert.equal(path.dirname(directory), path.resolve(tmpdir()));
+    assert.ok(path.basename(directory).startsWith('mfu-duration-repair-'));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const config = path.join(directory, 'wrangler.json');
+  await writeFile(config, JSON.stringify({ name: 'duration-repair-test', compatibility_date: '2026-10-03',
+    d1_databases: [{ binding: 'DB', database_name: 'duration-repair-test', database_id: '00000000-0000-0000-0000-000000000041' }],
+  }));
+  const db = wranglerDatabase({ config, persistTo: path.join(directory, 'state'), database: 'duration-repair-test' });
+  await db.execute(schema + `UPDATE playback_totals SET started_at_ms=1000;
+    INSERT INTO playback_events (id,actor_key,user_id,platform,playlist_id,song_id,duration_ms,surface,played_at_ms)
+    VALUES (1,'fixture',7,'netease','123','456',0,'player',2000), (2,'new',NULL,'kuwo','999','999',60000,'hls',3000);`);
+  const tracks = JSON.stringify([{ id: '456', duration: 285 }]);
+  const snapshot = { user_id: 7, playlist_id: '123', expires_at_ms: 9000, songs_json: tracks };
+  const sql = planDurationRepair({ startedAt: 1000, backupBeforeMs: 900,
+    events: [{ id: 1, user_id: 7, platform: 'netease', playlist_id: '123', song_id: '456', duration_ms: 0, played_at_ms: 2000 }],
+    current: [{ ...snapshot, cache_shape: 'array', tracks_json: tracks }],
+  }, [snapshot]).sql;
+  const totals = () => db.query('SELECT plays,duration_ms,known_duration_plays,player_plays,hls_plays FROM playback_totals')[0];
+  await assert.rejects(db.execute(sql + '\nINSERT INTO missing_table VALUES (1);'));
+  assert.deepEqual(totals(), { plays: 2, duration_ms: 60000, known_duration_plays: 1, player_plays: 1, hls_plays: 1 });
+  await db.execute(sql);
+  const restored = totals();
+  assert.deepEqual(restored, { plays: 2, duration_ms: 345000, known_duration_plays: 2, player_plays: 1, hls_plays: 1 });
+  await db.execute(sql);
+  assert.deepEqual(totals(), restored);
+  assert.equal(db.query('SELECT duration_ms FROM playback_events WHERE id=1')[0].duration_ms, 285000);
+  assert.equal(db.query("SELECT name FROM sqlite_schema WHERE name='__mfu_repair_legacy_duration'").length, 0);
 });
