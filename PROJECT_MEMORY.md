@@ -47,7 +47,7 @@
 - 备份及发布证据：Git 忽略目录 `.codex/releases/2026-11-05-master-51c81ed/`。迁移前书签 `00000348-00000000-0000511a-8a632b15e91dddaf6ffc04b2602d3721`；原可用 Worker 版本 `453a44ea-70e5-4351-953b-9ee5744a6698`。
 - 推送触发了既有 Cloudflare Workers Builds（build `73f7e4f3-509b-4d1a-8410-5b57729474ac`）。其发布结果为纯静态版本 `1e51015b-e951-487d-92c0-519d06d72c70`，首页引用 `/src/main.tsx`，API 404，且丢失原绑定。已回退原版本后按 `cloudflare/wrangler.jsonc` 手动发布完整 Worker。
 - 纯静态发布还移除了在线 `ENCRYPTION_KEY` 绑定；已使用原有 `.dev.vars.production` 备份恢复同一密钥，无轮换。恢复前在本地检查全部 43 条非空 Cookie 密文均可解密，7 个活跃会话均匹配；4 条已退出账号的空 Cookie 保持原样。没有撤销会话。
-- 当前生产 Worker 版本：`e3d55dce-2ed7-4417-9895-6e8e2b0d70f1`（100%），应用标记 `DEPLOY_VERSION=cca392e`。原 D1、私有 R2、Analytics、两个域名、workers.dev 与每日 UTC 03:17 Cron 已恢复并沿用。
+- 初次恢复版本：`e3d55dce-2ed7-4417-9895-6e8e2b0d70f1`，应用标记 `DEPLOY_VERSION=cca392e`，后续已由下方自动发布版本替换。原 D1、私有 R2、Analytics、两个域名、workers.dev 与每日 UTC 03:17 Cron 已恢复并沿用。
 - 线上验证：三个域名 health 均 200 / ok / cca392e；capabilities 与匿名 auth/status 为 200 JSON；QQ/酷狗/酷我 Cookie 入口为 405；首页引用生产 assets，375×812 页面宽度 375、输入框 52px，桌面/移动截图已检查；accounts/user/preview 刷新 200，无页面异常。真实平台账号与 VRChat/AVPro 尚待实际用户验收。
 
 ## 自动发布修复（2026-11-05）
@@ -59,4 +59,8 @@
 - 发布脚本补丁 `df2e936` 修复 Wrangler 远端文件导入输出混入进度文本导致的解析误报；严格查询 JSON、非零退出处理、迁移后 FK 与版本 ledger 检查保留。迁移单测 10/10、Worker 总测试 83/83、真实本地 D1 集成 1/1 通过，生产 no-op 检查通过。
 - `df2e936` 与自动部署文档已推送，候选 `07b201b` 的 GitHub Actions 检查及文档发布通过。
 - Cloudflare 专属构建失败已定位为 `EMFILE`：构建容器软/硬文件句柄上限均为 1024，提升额度被拒绝。包安装与解析诊断确认 clsx 完整；Vite 默认模块读取并发与 246 个字体 URL 读取叠加导致资源紧张。已在 `web/vite.config.ts` 将 Rollup `maxParallelFileOps` 设为 128，为字体加载留出空间；本地构建通过，下一步由真实 Cloudflare Builds 验证。临时诊断及 ulimit 命令已移除。
-- 下一步：推送构建并发修复，确认自动发布成功并核对线上版本、API、生产 assets 与原绑定。
+- 构建并发修复提交 `162edb95846004c964fe307958d0c91df16c6d21` 已推送并通过实际 Cloudflare Workers Builds：`689f24a4-8023-4f3b-af0f-0c6293394910`，完整测试、React 构建、Worker dry-run 与部署成功；构建/发布日志保存在 `.codex/releases/2026-11-05-master-51c81ed/automatic-build-162edb9.log`。
+- 当前生产 Worker：`ea1d63cd-49eb-4067-9f85-de7abb103d19`，`DEPLOY_VERSION=162edb95846004c964fe307958d0c91df16c6d21`。三域名 health=200/ok、capabilities=200、三平台 Cookie=405；生产 assets、375px 页面和全部绑定（含 ENCRYPTION_KEY）验收通过。原 47 个账号与数据库迁移验收继续有效。
+- Cloudflare 构建监视排除 `PROJECT_MEMORY.md`，只更新发布记录时不重新部署应用；其他路径继续触发构建。临时诊断及 ulimit 命令均已移除，生产分支仍为 master。
+- Cloudflare 实际部署与线上核验已成功；其 GitHub check-run 回写暂显示 in_progress，保留原始状态，不用手工改写。GitHub Actions `Project checks` run `42008009568` 已成功，覆盖 136 项测试、本地 D1 集成、React/Worker/Pages 与文档构建。独立文档站沿用已成功的 `42005728225`。
+- 真实平台账号扫码/密码登录和 VRChat/AVPro 仍需实际账号与客户端验证。后续维护仅改 master，node 保持 f3830c4。
