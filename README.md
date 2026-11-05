@@ -1,17 +1,15 @@
 # MusicForUrl
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/znc15/MusicForUrl/blob/master/LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-3c873a)](https://nodejs.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/cloudflare-workers%20%2B%20d1-f38020)](https://developers.cloudflare.com/workers/)
 
-把网易云音乐、QQ 音乐、酷狗与酷我的歌单转换成轻量音频 M3U8 直链，自带账号管理、收藏、播放记录和站内播放器。前端 React + Vite，后端使用 **Cloudflare Workers + D1**，可选私有 R2 音频缓存。
+把网易云音乐、QQ 音乐、酷狗与酷我的歌单转换成轻量音频 M3U8 直链，自带账号管理、收藏、播放记录和站内播放器。前端 React + Vite，后端使用 **Cloudflare Workers / Pages Functions + D1**，可选私有 R2 音频缓存。
 
 ## 维护分支
 
 - **`master`**：后续功能、修复与文档的维护入口，本页命令适用于此分支。
 - **`node`**：Node.js / Docker 冻结版本，保留拆分基线 `f3830c4` 的原始代码与运行说明。需要自有服务器部署时，使用[冻结版部署文档](https://github.com/znc15/MusicForUrl/blob/f3830c4/README.node-docker.md)。
-
-分支已在本地拆分；远端发布前，可通过上述基线提交链接查看冻结版文档。
 
 - 在线使用：<https://music.nyasakura.com/>
 - 文档站：<https://znc15.github.io/MusicForUrl/>
@@ -71,15 +69,18 @@ npm run dev
 cd cloudflare
 npx wrangler login
 npx wrangler d1 create music-for-url   # 把 database_id 写入 wrangler.jsonc
+# 先处理 routes 和可选 R2 绑定，见下文
 npm run db:remote
 Copy-Item .dev.vars.example .dev.vars.production
-# 编辑 .dev.vars.production，设置独立的 ENCRYPTION_KEY 后继续
-npm run build:assets
+# 将 ENCRYPTION_KEY 改为独立的至少 32 字符随机密钥并安全备份
+npm run build:assets                    # 直接调用 Wrangler 需要先构建静态资源
 npx wrangler deploy --secrets-file .dev.vars.production
 npm run deploy                          # 后续更新
 ```
 
-首次部署前务必删除或替换 `wrangler.jsonc` 中属于在线站点的 `routes`。升级顺序、环境变量与自定义域名见[部署文档](cloudflare/README.md)。已有 Pages 流程可使用仓库根目录的 `functions/` 与 `web/dist`，步骤见[Pages Functions 部署](website/guide/deployment.md#pages-functions)。
+首次部署前务必删除或替换 `wrangler.jsonc` 中属于在线站点的 `routes`。默认配置包含 R2：不需要缓存时，删除整个 `r2_buckets` 配置并将 `vars.AUDIO_CACHE_ENABLED` 设为 `"false"`；需要时先创建自己的私有桶并更新桶名（保留 `AUDIO_CACHE` 绑定名），见[私有 R2 缓存](cloudflare/README.md#私有-r2-缓存)。仅设置 `false` 仍要求绑定的桶存在。升级顺序、环境变量与自定义域名见[部署文档](cloudflare/README.md)。
+
+现有 **Cloudflare Pages** 项目接入新 UI：保持仓库根目录，构建命令 `npm --prefix cloudflare ci && npm --prefix web ci && npm run build:pages`，输出 `web/dist`，并保留根 `functions/` 与原 D1 / Secret。先按[Pages 升级检查表](website/guide/deployment.md#现有-pages-项目接入-react)确认旧库结构，再执行有备份的统一迁移。
 
 ## 文档
 

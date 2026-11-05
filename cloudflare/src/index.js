@@ -583,12 +583,13 @@ export default {
         .bind(Math.floor(now / 60000) - 1440).run(),
       env.DB.prepare('DELETE FROM qr_sessions WHERE expires_at_ms <= ?').bind(now).run(),
     ];
-    ctx.waitUntil(Promise.all(purges).then((results) => {
+    ctx.waitUntil(Promise.all(purges).then(async (results) => {
       const removed = results.slice(1).reduce((total, result) => total + (result?.meta?.changes || 0), 0);
       console.log(`[Cron] pruned ${removed} expired rows`);
+      // 清理失败时保留 rejection，不发布基于部分清理结果的统计。
+      // 派生指标必须等全部清理成功后重算；统计失败仍只记录日志。
+      await refreshSiteStats(env).catch((error) => console.error('[Cron] stats', error));
     }));
-    // 统计的派生指标在清理之后重算，这样「关于」页的数字与保留策略一致
-    ctx.waitUntil(refreshSiteStats(env).catch((error) => console.error('[Cron] stats', error)));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);

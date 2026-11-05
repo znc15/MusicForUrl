@@ -1,0 +1,71 @@
+name: Project checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloudflare:
+    name: Cloudflare tests and deployment builds
+    runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            cloudflare/package-lock.json
+      - run: npm ci --prefix web
+      - run: npm ci --prefix cloudflare
+      - run: npm test
+      - run: npm --prefix cloudflare run test:migrations:local
+      # Builds React (including typecheck), then compiles the Worker without deploying.
+      - run: npm run build:worker
+      # Reuse the same React artifact for the Pages Functions build.
+      - run: npm run check:pages
+      - name: Verify Pages artifact layout
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { existsSync, readFileSync } from 'node:fs';
+          assert.ok(existsSync('web/dist/index.html'));
+          assert.ok(existsSync('.pages-build/index.js'));
+          assert.ok(existsSync('functions/[[path]].js'));
+          assert.equal(existsSync('web/dist/_worker.js'), false);
+          assert.deepEqual(JSON.parse(readFileSync('web/dist/_routes.json', 'utf8')), {
+            version: 1, include: ['/api/*'], exclude: [],
+          });
+          JS
+
+  docs:
+    name: Documentation sync and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      # Includes repository document sync and VitePress dead-link validation.
+      - run: npm run build

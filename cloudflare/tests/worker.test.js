@@ -467,6 +467,75 @@ test('cron prunes playback stats older than the retention window without touchin
   assert.equal(env.sqlite.prepare("SELECT play_count AS plays FROM play_stats WHERE song_id = '99999'").get().plays, 1);
 });
 
+test('cron waits for every purge before publishing refreshed stats', async t => {
+  const env = testEnv();
+  t.after(() => env.sqlite.close());
+  const { user } = await signedInUser(env, 'netease', 'cron-order');
+  env.sqlite.prepare('INSERT INTO play_stats (user_id, playlist_id, song_id, play_count, last_played_at_ms) VALUES (?, ?, ?, ?, ?)')
+    .run(user.id, '123', 'stale', 7, Date.now() - PLAY_LOG_RETENTION_MS - 10000);
+  const prepare = env.DB.prepare.bind(env.DB);
+  const releases = [];
+  let aggregateReads = 0;
+  env.DB.prepare = sql => {
+    const statement = prepare(sql);
+    if (sql.startsWith('DELETE FROM')) {
+      const run = statement.run.bind(statement);
+      statement.run = () => new Promise(resolve => releases.push(() => resolve(run())));
+    }
+    if (sql.includes('SUM(play_count)')) aggregateReads++;
+    return statement;
+  };
+  const tasks = [];
+  worker.scheduled({}, env, { waitUntil(task) { tasks.push(task); } });
+  assert.equal(releases.length, 5);
+  assert.equal(aggregateReads, 0);
+  // Keep playback pruning last: the aggregate must not capture its expired row.
+  for (const release of releases.slice(1)) release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(aggregateReads, 0);
+  releases[0]();
+  await Promise.all(tasks);
+  assert.equal(aggregateReads, 1);
+  assert.equal(env.sqlite.prepare("SELECT value FROM site_stats WHERE key = 'plays'").get().value, 0);
+});
+
+test('cron preserves purge failures and does not refresh partially cleaned stats', async t => {
+  const env = testEnv();
+  t.after(() => env.sqlite.close());
+  const prepare = env.DB.prepare.bind(env.DB);
+  const failure = new Error('purge unavailable');
+  let aggregateReads = 0;
+  env.DB.prepare = sql => {
+    const statement = prepare(sql);
+    if (sql.startsWith('DELETE FROM qr_sessions')) statement.run = async () => { throw failure; };
+    if (sql.includes('SUM(play_count)')) aggregateReads++;
+    return statement;
+  };
+  const tasks = [];
+  worker.scheduled({}, env, { waitUntil(task) { tasks.push(task); } });
+  await assert.rejects(Promise.all(tasks), error => error === failure);
+  assert.equal(aggregateReads, 0);
+  assert.equal(env.sqlite.prepare('SELECT COUNT(*) AS count FROM site_stats').get().count, 0);
+});
+
+test('cron logs stats failures without rejecting completed cleanup', async t => {
+  const env = testEnv();
+  t.after(() => env.sqlite.close());
+  const prepare = env.DB.prepare.bind(env.DB);
+  const failure = new Error('stats unavailable');
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args));
+  env.DB.prepare = sql => {
+    const statement = prepare(sql);
+    if (sql.includes('SUM(play_count)')) statement.first = async () => { throw failure; };
+    return statement;
+  };
+  const tasks = [];
+  worker.scheduled({}, env, { waitUntil(task) { tasks.push(task); } });
+  await Promise.all(tasks);
+  assert.deepEqual(errors, [['[Cron] stats', failure]]);
+});
+
 test('recent and top history exclude expired events before the daily cleanup runs', async t => {
   const env = testEnv();
   t.after(() => env.sqlite.close());

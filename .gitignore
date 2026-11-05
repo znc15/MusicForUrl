@@ -320,3 +320,6 @@ core.*
 # Repository maintenance rules and local browser audit artifacts
 !/AGENTS.md
 /.playwright-mcp/
+
+# Local Pages Functions compilation (validation only)
+/.pages-build/

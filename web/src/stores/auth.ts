@@ -7,6 +7,7 @@ import { clearToken, readToken, writeToken } from '../lib/storage';
 import { activeAccount, readAccounts, removeAccount, upsertAccount, writeAccounts } from '../lib/workspace-rules';
 import type { AccountUser, Platform } from '../lib/types';
 
+/** 每个平台保留独立活动令牌，多账号登记按平台与账号 ID 保存。 */
 export interface AccountRecord {
   platform: Platform;
   userId: string;

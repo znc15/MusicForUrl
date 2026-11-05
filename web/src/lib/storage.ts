@@ -18,6 +18,14 @@ export const STORAGE_KEYS = {
   accounts: 'mfu:accounts',
 } as const;
 
+// 保留旧版网易云 / QQ 键；新平台必须独立，不能回退到网易云令牌。
+const TOKEN_KEYS: Record<Platform, string> = {
+  netease: STORAGE_KEYS.token,
+  qq: STORAGE_KEYS.qqToken,
+  kugou: STORAGE_KEYS.kugouToken,
+  kuwo: STORAGE_KEYS.kuwoToken,
+};
+
 function safeRead(key: string): string {
   try { return localStorage.getItem(key) ?? ''; } catch { return ''; }
 }
@@ -29,11 +37,6 @@ function safeWrite(key: string, value: string): void {
 function safeRemove(key: string): void {
   try { localStorage.removeItem(key); } catch { /* 忽略 */ }
 }
-
-const TOKEN_KEYS: Record<Platform, string> = {
-  netease: STORAGE_KEYS.token, qq: STORAGE_KEYS.qqToken,
-  kugou: STORAGE_KEYS.kugouToken, kuwo: STORAGE_KEYS.kuwoToken,
-};
 
 export function readToken(platform: Platform): string {
   return safeRead(TOKEN_KEYS[platform]);

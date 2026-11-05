@@ -22,7 +22,7 @@
 
 若优选入口出现 403、证书错误或播放失败，可先把 `music` 记录改回 CNAME `2f1343c8-5c9f-40dd-9784-3a0c2afe34e1.cfargotunnel.com` 并开启代理；这是切换前的 Fnos Tunnel 记录。保留 `music.nyasakura.com/*` Worker Route 即可继续由 Worker 响应。回滚后检查 `/api/health`、登录状态、M3U8 和音频请求，再排查 SaaS/DNS。不要改动其他 Tunnel 记录。
 
-这个版本用 **Cloudflare Workers Static Assets + Worker API + D1** 运行 MusicForUrl。网页源码位于 `web/`，构建到 `web/dist`；登录、歌单解析、签名链接、收藏和播放记录由 Worker 处理，账号 Cookie 经 AES-GCM 加密后存入 D1。无需 VPS、Docker 或常驻 Node 进程。
+这个版本用 **Cloudflare Workers Static Assets + Worker API + D1** 运行 MusicForUrl。网页源码位于 `web/`，构建到 `web/dist`，通过 `ASSETS` 绑定发布；登录、歌单解析、签名链接、收藏和播放记录由 Worker 处理，账号 Cookie 经 AES-GCM 加密后存入 D1。无需 VPS、Docker 或常驻 Node 进程。
 
 Cloudflare 目前建议新项目使用 Workers Static Assets；若你习惯 Pages，可把它理解为同类的静态资源加边缘函数部署方式。[Cloudflare 官方说明](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/#use-workers-static-assets-for-new-projects)
 
@@ -75,6 +75,16 @@ npm run db:migrate -- --local    # 本地开发库
 迁移会扩展旧 `users.platform` 约束、保留用户 ID 和关联数据、补齐 `duration_ms`、解除旧二维码平台限制。旧事件只回填缺失的聚合键；已有 `play_stats` 行保留原计数与时长，原事件继续存于 `play_logs`。新增历史时长为 `0`，表示未知；已经存在的时长保持原值。
 
 `db:local`、`db:remote` 及旧的 backfill/stats/qr npm 命令均转入统一迁移，旧 SQL 文件仅作为历史参考。回退 Worker 版本通常可继续使用升级后的表；恢复数据库原状态时使用迁移前备份或书签。
+
+升级前可以只读核对结构与外键，不读取账号密文或令牌：
+
+```sql
+SELECT name, sql FROM sqlite_schema WHERE name IN ('users', 'qr_sessions', 'play_stats', 'site_stats');
+PRAGMA foreign_key_check;
+```
+
+早期 `users.platform` 仅允许网易云与 QQ。统一迁移已覆盖该旧结构，并保留用户 ID、账号字段、索引、自增高水位及关联 playlists / favorites / play_stats / play_logs。D1 的延迟外键检查仍执行 `ON DELETE CASCADE`，迁移因此先暂存关联行再重建、恢复，并通过事务失败回滚测试。不要用旧 `CREATE TABLE IF NOT EXISTS` 代替约束升级。参考 [D1 外键](https://developers.cloudflare.com/d1/sql-api/foreign-keys/)和[导入导出](https://developers.cloudflare.com/d1/best-practices/import-export-data/)。
+
 
 ### 站点统计
 
@@ -161,6 +171,8 @@ npm run check
 npm run build
 ```
 
+`npm run dev` 会先构建 `web/dist`，需安装 `web/` 和 `cloudflare/` 两套依赖。
+
 本地开发默认使用 Wrangler 的本地 D1 数据，不会修改远端数据库。生产密钥的本机备份为 Git 忽略的 `.dev.vars.production`；请将它备份到你自己的安全位置，避免丢失后无法解密已保存的账号 Cookie。
 
 ## 首次部署
@@ -170,9 +182,10 @@ npm run build
 1. 登录 Wrangler：`npx wrangler login`。
 2. 创建 D1：`npx wrangler d1 create music-for-url`。把返回的 `database_id` 填进 `wrangler.jsonc`，保留 `DB` 绑定名。
 3. 删除 `wrangler.jsonc` 中本站的 `routes`，保留 `workers_dev: true`；如需自定义域名，使用自己账号下的域名配置。
-4. 初始化远端表：`npm run db:remote`。
-5. 从 `.dev.vars.example` 复制出 Git 忽略的 `.dev.vars.production`，将 `ENCRYPTION_KEY` 改为独立的至少 32 字符随机密钥，并安全备份。
-6. 执行 `npm run build:assets`，再用 `npx wrangler deploy --secrets-file .dev.vars.production` 同时发布 Worker 与密钥。这里直接调用 Wrangler，需要先手动构建静态依赖。以后代码更新使用 `npm run deploy` 即可自动构建并保留已有密钥。
+4. 处理可选 R2：启用缓存时，先按[私有 R2 缓存](#私有-r2-缓存)创建自己的私有桶并更新 `r2_buckets` 中的 `bucket_name`，保留 `AUDIO_CACHE` 绑定名；不用 R2 时，删除整个 `r2_buckets` 配置并将 `vars.AUDIO_CACHE_ENABLED` 设为 `"false"`。仅设为 `false` 仍要求绑定的桶存在。
+5. 初始化远端表：`npm run db:remote`。
+6. 从 `.dev.vars.example` 复制出 Git 忽略的 `.dev.vars.production`，将 `ENCRYPTION_KEY` 改为独立的至少 32 字符随机密钥，并安全备份。
+7. 执行 `npm run build:assets`，再用 `npx wrangler deploy --secrets-file .dev.vars.production` 同时发布 Worker 与密钥。这里直接调用 Wrangler，需要先手动构建静态资源。以后代码更新使用 `npm run deploy` 即可自动构建并保留已有密钥。
 
 可在 Cloudflare 的 Worker 设置中添加 `TOKEN_TTL_HOURS`、`PLAYBACK_TOKEN_TTL_SECONDS`、`CACHE_TTL`、`MUSIC_QUALITY` 等可选变量。密钥应设置为 **Secret**，不要写入 `wrangler.jsonc` 或 Git。
 
@@ -194,7 +207,7 @@ npx wrangler r2 bucket lifecycle add music-for-url-private-cache expire-cover --
 
 ## Pages 兼容部署与官网
 
-Pages Functions 入口在仓库根目录 `functions/[[path]].js`，配置为 `cloudflare/wrangler.pages.jsonc`，静态产物统一使用 `web/dist`。从仓库根目录部署，以便 Wrangler 同时发现 `functions/`。设置 D1 / R2 和 Secret，定时清理另配维护 Worker；推荐 Workers Static Assets。步骤见[部署指南](../website/guide/deployment.md)。
+Pages Functions 入口在仓库根目录 `functions/[[path]].js`，复用本 Worker API，现有 Pages 项目可发布 React 的 `web/dist`。从仓库根目录安装 `cloudflare/` 与 `web/` 的依赖，再执行 `npm run build:pages`，同时验证 React 与 Functions 构建。保留根 `functions/`、原 D1 绑定与 Secret。`cloudflare/wrangler.pages.jsonc` 是显式 CLI 配置示例，部署前核实项目名、D1 ID 和可选 R2，避免占位值覆盖现有设置。控制台设置、旧库升级与回退见[Pages 升级指南](../website/guide/deployment.md#现有-pages-项目接入-react)。Pages 定时清理仍须单独维护。
 
 官网在 [GitHub Pages](https://znc15.github.io/MusicForUrl/) 发布，构建前自动同步项目 README、Cloudflare 和动画说明三份文档。冻结版 Node.js / Docker 文档使用基线提交链接，不生成副本。`.github/workflows/website.yml` 在维护分支推送后自动构建和发布。
 

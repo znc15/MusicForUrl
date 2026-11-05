@@ -14,7 +14,9 @@
     "build": "npm --prefix web run build",
     "build:worker": "npm run build && npm --prefix cloudflare run build:worker",
     "docs:build": "npm --prefix website run build",
-    "deploy": "npm --prefix cloudflare run deploy"
+    "deploy": "npm --prefix cloudflare run deploy",
+    "check:pages": "node cloudflare/node_modules/wrangler/bin/wrangler.js pages functions build functions --outdir .pages-build --build-output-directory web/dist --compatibility-date=2026-10-03",
+    "build:pages": "npm run build && npm run check:pages"
   },
   "keywords": [
     "netease",
