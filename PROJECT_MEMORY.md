@@ -50,8 +50,11 @@
 - 当前生产 Worker 版本：`e3d55dce-2ed7-4417-9895-6e8e2b0d70f1`（100%），应用标记 `DEPLOY_VERSION=cca392e`。原 D1、私有 R2、Analytics、两个域名、workers.dev 与每日 UTC 03:17 Cron 已恢复并沿用。
 - 线上验证：三个域名 health 均 200 / ok / cca392e；capabilities 与匿名 auth/status 为 200 JSON；QQ/酷狗/酷我 Cookie 入口为 405；首页引用生产 assets，375×812 页面宽度 375、输入框 52px，桌面/移动截图已检查；accounts/user/preview 刷新 200，无页面异常。真实平台账号与 VRChat/AVPro 尚待实际用户验收。
 
-## 当前阻塞与下一步
+## 自动发布修复（2026-11-05）
 
-- **Cloudflare 自动发布配置待修正**：控制台浏览器未登录，已请求用户在打开的 Cloudflare 页面完成登录。CLI 发布可用，但下次普通推送仍可能触发错误的纯静态部署。先修正 Worker Settings → Build 的根目录、构建和部署命令，再推送后续提交；本轮不改登录凭据或创建新 API Token。
-- 推荐配置：根目录仓库根；构建 `npm --prefix cloudflare ci && npm --prefix web ci && npm test && npm run build:worker`；部署 `node cloudflare/node_modules/wrangler/bin/wrangler.js deploy --config cloudflare/wrangler.jsonc --keep-vars`；生产分支 master，Node.js 24，沿用原资源和 Secret。需要通过下一次实际自动构建确认 API / assets / 绑定完整。
-- **本地待推送补丁**：`cloudflare/scripts/migrate.mjs` 已修复 Wrangler 远端文件导入输出混入进度文本导致的 JSON 解析误报；严格查询 JSON、非零退出处理、迁移后 FK 与版本 ledger 检查保留。迁移单测 10/10、Worker 总测试 83/83、真实本地 D1 集成 1/1 通过；生产 no-op 检查通过。补丁及本记录将在自动发布配置修好后推送。
+- 用户已完成控制台登录。已核实原配置为仓库根目录 `/`、空构建命令、默认 `npx wrangler deploy`，导致未读取 `cloudflare/wrangler.jsonc`。现已保存正确设置，生产分支继续为 `master`。
+- 构建：`npm --prefix cloudflare ci && npm --prefix web ci && npm test && npm run build:worker`。
+- 部署：`node cloudflare/node_modules/wrangler/bin/wrangler.js deploy --config cloudflare/wrangler.jsonc --keep-vars --var "DEPLOY_VERSION:$WORKERS_CI_COMMIT_SHA"`。
+- 构建变量：`NODE_VERSION=24`、`SKIP_DEPENDENCY_INSTALL=1`。继续沿用原构建令牌、D1、R2、Analytics、Cron、域名与运行 Secret。
+- 发布脚本补丁 `df2e936` 修复 Wrangler 远端文件导入输出混入进度文本导致的解析误报；严格查询 JSON、非零退出处理、迁移后 FK 与版本 ledger 检查保留。迁移单测 10/10、Worker 总测试 83/83、真实本地 D1 集成 1/1 通过，生产 no-op 检查通过。
+- 下一步：推送补丁与自动部署说明，跟进实际 Cloudflare Workers Builds 和 GitHub Actions，核对线上版本、API、生产 assets 与原绑定。

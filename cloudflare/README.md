@@ -189,6 +189,26 @@ npm run build
 
 可在 Cloudflare 的 Worker 设置中添加 `TOKEN_TTL_HOURS`、`PLAYBACK_TOKEN_TTL_SECONDS`、`CACHE_TTL`、`MUSIC_QUALITY` 等可选变量。密钥应设置为 **Secret**，不要写入 `wrangler.jsonc` 或 Git。
 
+## Git 推送后自动发布
+
+在现有 Worker 的 **Settings → Build** 中连接本仓库，生产分支选择 `master`，根目录为 `/`。构建命令：
+
+```sh
+npm --prefix cloudflare ci && npm --prefix web ci && npm test && npm run build:worker
+```
+
+部署命令显式选中 Worker 配置，并使用锁文件中的 Wrangler：
+
+```sh
+node cloudflare/node_modules/wrangler/bin/wrangler.js deploy --config cloudflare/wrangler.jsonc --keep-vars --var "DEPLOY_VERSION:$WORKERS_CI_COMMIT_SHA"
+```
+
+设置构建变量 `NODE_VERSION=24` 和 `SKIP_DEPENDENCY_INSTALL=1`。这条流程先测试并构建 React，再将 `web/dist`、API 和配置中的资源绑定一起发布。`DEPLOY_VERSION` 记录触发构建的提交，可从 `/api/health` 核对。根目录直接执行默认 `npx wrangler deploy` 会遗漏嵌套配置，因此应保留上面的显式路径。
+
+沿用现有生产 `ENCRYPTION_KEY` Secret；构建环境无需复制密钥。`--keep-vars` 保留控制台添加的其他普通运行变量，同名变量以配置与部署参数为准。数据库升级按前面的备份与迁移步骤单独执行，自动构建仅运行迁移测试。
+
+参考 [Workers Builds 配置](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)与[构建镜像变量](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)。
+
 ## 私有 R2 缓存
 
 `AUDIO_CACHE` 绑定指向私有桶，`AUDIO_CACHE_ENABLED=true` 启用；当前站点使用专用 `music-for-url-private-cache`。在其他账号部署时先创建桶并更换绑定；不启用则删除绑定并设 `false`。
