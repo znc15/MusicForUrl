@@ -23,6 +23,8 @@ export default defineConfig({
     // 目标只覆盖支持 ESM 与现代 CSS 的浏览器，避免为旧语法额外转译
     target: 'es2022',
     rollupOptions: {
+      // Cloudflare 构建环境限制为 1024 个文件句柄，为字体资源并行读取留出余量。
+      maxParallelFileOps: 128,
       output: {
         // 依赖拆成稳定的长缓存块：业务代码更新时，React / 组件库的哈希不变。
         // motion 不在这里分组：它需要按「核心 + 异步 domMax」自动拆分。

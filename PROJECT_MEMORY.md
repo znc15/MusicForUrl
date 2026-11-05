@@ -57,4 +57,6 @@
 - 部署：`node cloudflare/node_modules/wrangler/bin/wrangler.js deploy --config cloudflare/wrangler.jsonc --keep-vars --var "DEPLOY_VERSION:$WORKERS_CI_COMMIT_SHA"`。
 - 构建变量：`NODE_VERSION=24`、`SKIP_DEPENDENCY_INSTALL=1`。继续沿用原构建令牌、D1、R2、Analytics、Cron、域名与运行 Secret。
 - 发布脚本补丁 `df2e936` 修复 Wrangler 远端文件导入输出混入进度文本导致的解析误报；严格查询 JSON、非零退出处理、迁移后 FK 与版本 ledger 检查保留。迁移单测 10/10、Worker 总测试 83/83、真实本地 D1 集成 1/1 通过，生产 no-op 检查通过。
-- 下一步：推送补丁与自动部署说明，跟进实际 Cloudflare Workers Builds 和 GitHub Actions，核对线上版本、API、生产 assets 与原绑定。
+- `df2e936` 与自动部署文档已推送，候选 `07b201b` 的 GitHub Actions 检查及文档发布通过。
+- Cloudflare 专属构建失败已定位为 `EMFILE`：构建容器软/硬文件句柄上限均为 1024，提升额度被拒绝。包安装与解析诊断确认 clsx 完整；Vite 默认模块读取并发与 246 个字体 URL 读取叠加导致资源紧张。已在 `web/vite.config.ts` 将 Rollup `maxParallelFileOps` 设为 128，为字体加载留出空间；本地构建通过，下一步由真实 Cloudflare Builds 验证。临时诊断及 ulimit 命令已移除。
+- 下一步：推送构建并发修复，确认自动发布成功并核对线上版本、API、生产 assets 与原绑定。
