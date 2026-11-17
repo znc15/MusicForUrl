@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { ACCOUNT_PLATFORMS, PLATFORM_IDS } from '../lib/platforms';
 import { clearToken, readToken, writeToken } from '../lib/storage';
 import { activeAccount, readAccounts, removeAccount, upsertAccount, writeAccounts } from '../lib/workspace-rules';
-import type { AccountUser, Platform } from '../lib/types';
+import type { AccountUser, AuthStatus, Platform } from '../lib/types';
 
 /** 每个平台保留独立活动令牌，多账号登记按平台与账号 ID 保存。 */
 export interface AccountRecord {
@@ -80,15 +80,37 @@ function isUnauthorized(error: unknown): boolean {
   return error instanceof Error && 'status' in error && (error as { status?: number }).status === 401;
 }
 
+interface SwitchOperation {
+  userId: string;
+  controller: AbortController;
+}
+
 export const useAuth = create<AuthState>((set, get) => {
   const pending = new Map<Platform, { token: string; controller: AbortController; promise: Promise<AccountUser | null> }>();
+  const switches = new Map<Platform, SwitchOperation>();
   let bootstrap: Promise<void> | null = null;
 
+  /** 只取消指定平台（可选指定目标）仍在验证中的切换。 */
+  function cancelSwitch(platform: Platform, userId?: string) {
+    const operation = switches.get(platform);
+    if (!operation || (userId !== undefined && operation.userId !== userId)) return;
+    switches.delete(platform);
+    operation.controller.abort();
+  }
+
   function invalidate(platform: Platform) {
+    cancelSwitch(platform);
     pending.get(platform)?.controller.abort();
     pending.delete(platform);
     clearAccountQueries(platform);
     if (usePlayer.getState().platform === platform) usePlayer.getState().clear();
+  }
+
+  /** 验证失败的账号只从本机登记表移除；绝不动当前生效的令牌或其他账号。 */
+  function removeExpiredTarget(platform: Platform, userId: string, token: string) {
+    const latest = get().accounts.find(item => item.platform === platform && item.userId === userId);
+    if (!latest || latest.token !== token || get().tokens[platform] === token) return;
+    set(state => ({ accounts: persist(removeAccount(state.accounts, platform, userId)) }));
   }
 
   function drop(platform: Platform, userId?: string) {
@@ -118,15 +140,72 @@ export const useAuth = create<AuthState>((set, get) => {
     async switchTo(platform, userId) {
       const record = get().accounts.find(item => item.platform === platform && item.userId === userId);
       if (!record) return { ok: false, message: '请重新登录这个账号' };
+
+      // 用户的新操作（即使目标是当前账号）都优先于该平台上更早的验证。
+      cancelSwitch(platform);
+      const activeToken = get().tokens[platform];
+      const sameToken = activeToken === record.token;
+      if (sameToken && get().users[platform]?.userId === userId) return { ok: true };
+
+      const controller = new AbortController();
+      const operation: SwitchOperation = { userId, controller };
+      switches.set(platform, operation);
+
+      let status: AuthStatus | null = null;
+      let failure: unknown = null;
+      try {
+        // 验证目标令牌时保持当前令牌、私有查询和播放器不变。
+        status = await api.authStatus(platform, { token: record.token, signal: controller.signal });
+      } catch (error) {
+        failure = error;
+      }
+
+      // 代次/控制器决定响应归属；活动令牌只是额外的会话防线。
+      const current = switches.get(platform) === operation && !controller.signal.aborted;
+      if (switches.get(platform) === operation) switches.delete(platform);
+      if (!current || get().tokens[platform] !== activeToken) return { ok: false, message: '此次切换已取消' };
+
+      const latest = get().accounts.find(item => item.platform === platform && item.userId === userId);
+      if (!latest || latest.token !== record.token) return { ok: false, message: '此次切换已取消' };
+
+      const expiredMessage = '这个账号的登录已过期，请重新登录';
+      const expire = () => {
+        if (sameToken && get().tokens[platform] === record.token) drop(platform, userId);
+        else removeExpiredTarget(platform, userId, record.token);
+      };
+
+      if (failure) {
+        if (isUnauthorized(failure)) {
+          expire();
+          return { ok: false, message: expiredMessage };
+        }
+        return { ok: false, message: '未能验证账号，请重试或重新登录' };
+      }
+      if (!status || !status.logged || !status.user) {
+        expire();
+        return { ok: false, message: expiredMessage };
+      }
+
+      const user: AccountUser = { ...status.user, platform };
+      // 同一个活动令牌只补齐资料，不清理现有查询与播放器。
+      if (sameToken) {
+        writeToken(platform, record.token);
+        set(state => ({
+          users: { ...state.users, [platform]: user },
+          accounts: persist(upsertAccount(state.accounts, recordFrom(platform, record.token, user))),
+        }));
+        return { ok: true };
+      }
+
+      // 验证成功后才替换会话，并清理旧账号的私有状态与队列。
       invalidate(platform);
       writeToken(platform, record.token);
       set(state => ({
         tokens: { ...state.tokens, [platform]: record.token },
-        users: { ...state.users, [platform]: null },
+        users: { ...state.users, [platform]: user },
+        accounts: persist(upsertAccount(state.accounts, recordFrom(platform, record.token, user))),
       }));
-      const user = await get().refresh(platform);
-      if (get().tokens[platform] !== record.token) return { ok: false, message: '账号已切换' };
-      return user ? { ok: true } : { ok: false, message: '未能验证账号，请重试或重新登录' };
+      return { ok: true };
     },
 
     async logout(platform) {
@@ -137,6 +216,7 @@ export const useAuth = create<AuthState>((set, get) => {
     },
 
     forget(platform, userId) {
+      cancelSwitch(platform, userId);
       const active = activeAccount(get().accounts, platform, get().tokens[platform]);
       if (active?.userId === userId) drop(platform, userId);
       else set(state => ({ accounts: persist(removeAccount(state.accounts, platform, userId)) }));

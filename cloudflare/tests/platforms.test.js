@@ -100,6 +100,22 @@ test('playlist and song ID shapes are validated per platform', () => {
   assert.ok(!validPlaylistId(KUGOU_HASH, 'kuwo'));
 });
 
+test('Netease playlist hash routes resolve without accepting other hash pages', () => {
+  for (const input of [
+    'https://music.163.com/#/playlist?id=123456',
+    'https://music.163.com/?from=share#/playlist?id=123456&userid=1001',
+    'https://music.163.com/#/playlist/123456',
+    '  https://music.163.com/#/playlist?id=123456  ',
+  ]) {
+    assert.equal(parsePlaylistId(input, 'netease'), '123456', input);
+  }
+  for (const route of ['/song?id=123456', '/album?id=123456', '/playlist_detail?id=123456',
+    '/playlist?id=invalid', '/playlist?id=123456789012345678901']) {
+    assert.equal(parsePlaylistId(`https://music.163.com/#${route}`, 'netease'), null, route);
+  }
+  assert.equal(parsePlaylistId('https://music.163.com/#/playlist?id=123456', 'qq'), null);
+});
+
 test('capability matrix declares the account boundary for every platform', () => {
   const matrix = capabilityMatrix();
   assert.deepEqual(matrix.map(item => item.id), ['netease', 'qq', 'kugou', 'kuwo']);

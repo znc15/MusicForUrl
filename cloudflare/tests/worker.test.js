@@ -129,6 +129,41 @@ test('new Worker player authorizes before R2, supports ranges, isolates accounts
   await Promise.all(pending);
 });
 
+test('Netease hash links parse and generate a playable playlist through the Worker', async t => {
+  const env = testEnv(); t.after(() => env.sqlite.close());
+  const { user, token } = await signedInUser(env, 'netease', '1001');
+  await env.DB.prepare(`
+    INSERT INTO playlists (user_id, playlist_id, name, cover, song_count, songs_json, expires_at_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(user.id, '123456', 'Hash route list', '', 1, JSON.stringify([
+    { id: '555', name: 'Track', artist: 'Artist', duration: 200 },
+  ]), Date.now() + 60000).run();
+  const pending = [];
+  const ctx = { waitUntil(promise) { pending.push(promise); } };
+  const input = 'https://music.163.com/#/playlist?id=123456';
+  const parsed = await worker.fetch(new Request(
+    `https://music.example.test/api/playlist/parse?${new URLSearchParams({ url: input })}`,
+    { headers: { 'x-token': token } },
+  ), env, ctx);
+  assert.equal(parsed.status, 200);
+  assert.equal((await parsed.json()).data.id, '123456');
+
+  const generated = await worker.fetch(new Request('https://music.example.test/api/playlist/generate', {
+    method: 'POST', headers: { 'x-token': token, 'content-type': 'application/json' },
+    body: JSON.stringify({ url: input }),
+  }), env, ctx);
+  assert.equal(generated.status, 200);
+  const { data } = await generated.json();
+  assert.equal(data.playlist.id, '123456');
+  assert.equal(data.playlist.includedCount, 1);
+  const playlist = await worker.fetch(new Request(data.url), env, ctx);
+  assert.equal(playlist.status, 200);
+  const content = await playlist.text();
+  assert.match(content, /#EXTINF:200\.000,Artist - Track/);
+  assert.match(content, /\/555\.mp3\?playlist=123456&hls=1/);
+  await Promise.all(pending);
+});
+
 test('resolve cache uses the Cache API with an absolute URL key and writes no D1 rows', async t => {
   const env = testEnv();
   t.after(() => env.sqlite.close());

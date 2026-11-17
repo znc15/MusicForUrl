@@ -50,13 +50,19 @@ function parsePlaylistId(input, platform = 'netease') {
   if (validPlaylistId(value, platform)) return value;
   try {
     const url = new URL(value);
-    for (const key of PLAYLIST_QUERY_KEYS[platform] || ['id']) {
-      const param = url.searchParams.get(key);
-      if (validPlaylistId(param, platform)) return param;
+    const candidates = [url];
+    if (platform === 'netease' && /^#\/playlist(?:[/?]|$)/.test(url.hash)) {
+      candidates.push(new URL(url.hash.slice(1), url.origin));
     }
-    for (const rule of PLAYLIST_URL_RULES[platform] || []) {
-      const match = url.pathname.match(rule);
-      if (match) return match[1];
+    for (const candidate of candidates) {
+      for (const key of PLAYLIST_QUERY_KEYS[platform] || ['id']) {
+        const param = candidate.searchParams.get(key);
+        if (validPlaylistId(param, platform)) return param;
+      }
+      for (const rule of PLAYLIST_URL_RULES[platform] || []) {
+        const match = candidate.pathname.match(rule);
+        if (match) return match[1];
+      }
     }
   } catch (_) {
     // An ID or supported URL is required.

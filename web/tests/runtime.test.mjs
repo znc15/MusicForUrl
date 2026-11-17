@@ -52,6 +52,24 @@ const user = id => ({ userId: id, nickname: id, avatar: '', vipType: 0 });
 const list = id => ({ id, platform: 'netease', name: id, cover: '', grant: `grant-${id}`,
   tracks: [{ id: `${id}1`, name: 'Track', artist: '', cover: '', duration: 180 }] });
 const source = id => ({ mediaUrl: `https://app.test/${id}.mp3`, warnings: [], format: 'mp3', bitrate: 128000 });
+const seededAccounts = (...items) => JSON.stringify(items.map(([platform, userId, token]) => ({
+  platform, userId, nickname: userId, avatar: '', vipType: 0, token, addedAt: 1,
+})));
+const openPlayer = async (r, id = 'playing') => {
+  r.api.playerPlaylist = async () => list(id);
+  r.api.resolve = async (_platform, options) => source(options.playlistId);
+  assert.equal(await r.usePlayer.getState().open('netease', id), true);
+  return r.usePlayer.getState().playlist.id;
+};
+const seedPrivateState = (r, userId = 'a') => {
+  const key = r.accountQueryKey('netease', userId, 'favorites');
+  r.queryClient.setQueryData(key, { data: [{ playlistId: 'keep' }], total: 1 });
+  return key;
+};
+const assertPrivateState = (r, key) => {
+  assert.equal(r.usePlayer.getState().playlist?.id ?? null, 'playing');
+  assert.deepEqual(r.queryClient.getQueryData(key), { data: [{ playlistId: 'keep' }], total: 1 });
+};
 
 test('four platform tokens use independent keys and preserve legacy preferences', t => {
   const r = runtime(t, { token: 'old-netease', qqToken: 'old-qq', theme: 'dark' });
@@ -184,6 +202,291 @@ test('logout clears locally first and its delayed response preserves a new login
   r.useAuth.getState().adopt('qq', 'new-token', user('new'));
   pending.resolve(); await logout;
   assert.equal(r.readToken('qq'), 'new-token');
+});
+
+test('switch verification failure preserves the current account, private queries and playback', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-token']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const key = seedPrivateState(r);
+  await openPlayer(r);
+  const pending = deferred();
+  let request;
+  r.api.authStatus = (_platform, options) => { request = options; return pending.promise; };
+  const switching = r.useAuth.getState().switchTo('netease', 'b');
+  assert.equal(request.token, 'b-token');
+  assert.ok(request.signal instanceof AbortSignal);
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assert.equal(r.useAuth.getState().users.netease.userId, 'a');
+  assert.equal(r.readToken('netease'), 'a-token');
+  assertPrivateState(r, key);
+  pending.reject(new Error('Offline'));
+  const result = await switching;
+  assert.equal(result.ok, false);
+  assert.match(result.message, /未能验证/);
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assert.equal(r.useAuth.getState().users.netease.userId, 'a');
+  assert.equal(r.readToken('netease'), 'a-token');
+  assert.ok(r.useAuth.getState().accounts.some(item => item.userId === 'b'));
+  assertPrivateState(r, key);
+});
+
+for (const expired of ['401', 'logged:false']) {
+  test(`switching to an expired account removes only that record (${expired})`, async t => {
+    const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-token']) });
+    r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+    const key = seedPrivateState(r);
+    await openPlayer(r);
+    r.api.authStatus = expired === '401'
+      ? async () => { throw new r.ApiError('Expired', 'login_required', 401); }
+      : async () => ({ logged: false });
+    const result = await r.useAuth.getState().switchTo('netease', 'b');
+    assert.equal(result.ok, false);
+    assert.match(result.message, /过期/);
+    assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+    assert.equal(r.useAuth.getState().users.netease.userId, 'a');
+    assert.equal(r.readToken('netease'), 'a-token');
+    assert.equal(r.useAuth.getState().accounts.some(item => item.userId === 'b'), false);
+    assert.equal(r.useAuth.getState().accounts.some(item => item.userId === 'a'), true);
+    assertPrivateState(r, key);
+  });
+}
+
+test('switch commits only after verification and then clears the old private state', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-token']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const key = seedPrivateState(r);
+  await openPlayer(r);
+  const pending = deferred();
+  r.api.authStatus = () => pending.promise;
+  const switching = r.useAuth.getState().switchTo('netease', 'b');
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assert.equal(r.useAuth.getState().users.netease.userId, 'a');
+  assert.equal(r.readToken('netease'), 'a-token');
+  assertPrivateState(r, key);
+  pending.resolve({ logged: true, user: user('b') });
+  assert.equal((await switching).ok, true);
+  assert.equal(r.useAuth.getState().tokens.netease, 'b-token');
+  assert.equal(r.useAuth.getState().users.netease.userId, 'b');
+  assert.equal(r.readToken('netease'), 'b-token');
+  assert.equal(r.usePlayer.getState().playlist, null);
+  assert.equal(r.queryClient.getQueryData(key), undefined);
+  assert.ok(r.useAuth.getState().accounts.some(item => item.userId === 'a'));
+  assert.ok(r.useAuth.getState().accounts.some(item => item.userId === 'b'));
+});
+
+for (const order of ['c-first', 'b-first']) {
+  for (const late of ['success', '401']) {
+    test(`latest switch wins when responses return out of order (${order}, ${late})`, async t => {
+      const r = runtime(t, { 'mfu:accounts': seededAccounts(
+        ['netease', 'a', 'a-token'], ['netease', 'b', 'b-token'], ['netease', 'c', 'c-token'],
+      ) });
+      r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+      const requests = [];
+      const observedTokens = [];
+      r.api.authStatus = (_platform, options) => {
+        observedTokens.push(r.useAuth.getState().tokens.netease);
+        const pending = deferred();
+        requests.push({ options, pending });
+        return pending.promise;
+      };
+      const b = r.useAuth.getState().switchTo('netease', 'b');
+      const c = r.useAuth.getState().switchTo('netease', 'c');
+      assert.deepEqual(observedTokens, ['a-token', 'a-token']);
+      assert.equal(requests.length, 2);
+      assert.equal(requests[0].options.token, 'b-token');
+      assert.equal(requests[1].options.token, 'c-token');
+      assert.equal(requests[0].options.signal.aborted, true);
+      assert.equal(requests[1].options.signal.aborted, false);
+      assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+      const finishB = () => late === 'success'
+        ? requests[0].pending.resolve({ logged: true, user: user('b') })
+        : requests[0].pending.reject(new r.ApiError('Expired', 'login_required', 401));
+      if (order === 'c-first') {
+        requests[1].pending.resolve({ logged: true, user: user('c') });
+        assert.equal((await c).ok, true);
+        assert.equal(r.useAuth.getState().tokens.netease, 'c-token');
+        finishB();
+      } else {
+        finishB();
+        assert.equal((await b).ok, false);
+        assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+        requests[1].pending.resolve({ logged: true, user: user('c') });
+        assert.equal((await c).ok, true);
+      }
+      assert.equal(r.useAuth.getState().tokens.netease, 'c-token');
+      assert.equal(r.useAuth.getState().users.netease.userId, 'c');
+      assert.equal(r.readToken('netease'), 'c-token');
+      assert.equal((await b).ok, false);
+      assert.equal(r.useAuth.getState().tokens.netease, 'c-token');
+      assert.ok(r.useAuth.getState().accounts.some(item => item.userId === 'a'));
+      assert.ok(r.useAuth.getState().accounts.some(item => item.userId === 'b'));
+      assert.ok(r.useAuth.getState().accounts.some(item => item.userId === 'c'));
+    });
+  }
+}
+
+test('adopt during verification cancels the switch and a late failure cannot remove the new session', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-token']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const pending = deferred();
+  let signal;
+  r.api.authStatus = (_platform, options) => { signal = options.signal; return pending.promise; };
+  const switching = r.useAuth.getState().switchTo('netease', 'b');
+  r.useAuth.getState().adopt('netease', 'a2-token', user('a'));
+  assert.equal(signal.aborted, true);
+  pending.reject(new r.ApiError('Expired', 'login_required', 401));
+  assert.equal((await switching).ok, false);
+  assert.equal(r.useAuth.getState().tokens.netease, 'a2-token');
+  assert.equal(r.useAuth.getState().users.netease.userId, 'a');
+  assert.equal(r.readToken('netease'), 'a2-token');
+});
+
+test('a same-account new token survives a late failure from the old verification', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-old']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const pending = deferred();
+  let signal;
+  r.api.authStatus = (_platform, options) => { signal = options.signal; return pending.promise; };
+  const switching = r.useAuth.getState().switchTo('netease', 'b');
+  r.useAuth.getState().adopt('netease', 'b-new', user('b'));
+  assert.equal(signal.aborted, true);
+  pending.reject(new r.ApiError('Expired', 'login_required', 401));
+  assert.equal((await switching).ok, false);
+  assert.equal(r.useAuth.getState().tokens.netease, 'b-new');
+  assert.equal(r.useAuth.getState().users.netease.userId, 'b');
+  assert.equal(r.readToken('netease'), 'b-new');
+  const record = r.useAuth.getState().accounts.find(item => item.userId === 'b');
+  assert.equal(record.token, 'b-new');
+});
+
+test('forgetting the switch target cancels verification without touching the active account', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-token']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const key = seedPrivateState(r);
+  await openPlayer(r);
+  const pending = deferred();
+  let signal;
+  r.api.authStatus = (_platform, options) => { signal = options.signal; return pending.promise; };
+  const switching = r.useAuth.getState().switchTo('netease', 'b');
+  r.useAuth.getState().forget('netease', 'b');
+  assert.equal(signal.aborted, true);
+  assert.equal(r.useAuth.getState().accounts.some(item => item.userId === 'b'), false);
+  pending.resolve({ logged: true, user: user('b') });
+  const result = await switching;
+  assert.equal(result.ok, false);
+  assert.equal(result.message, '此次切换已取消');
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assert.equal(r.useAuth.getState().users.netease.userId, 'a');
+  assert.equal(r.useAuth.getState().accounts.some(item => item.userId === 'b'), false);
+  assertPrivateState(r, key);
+});
+
+test('logout during verification cancels the switch and a late success cannot re-login', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-token']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const pending = deferred();
+  let signal;
+  r.api.authStatus = (_platform, options) => { signal = options.signal; return pending.promise; };
+  r.api.logout = async () => {};
+  const switching = r.useAuth.getState().switchTo('netease', 'b');
+  await r.useAuth.getState().logout('netease');
+  assert.equal(signal.aborted, true);
+  pending.resolve({ logged: true, user: user('b') });
+  assert.equal((await switching).ok, false);
+  assert.equal(r.useAuth.getState().tokens.netease, '');
+  assert.equal(r.useAuth.getState().users.netease, null);
+  assert.equal(r.readToken('netease'), '');
+});
+
+test('switching to the active account is a no-op and supersedes an older pending switch', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token'], ['netease', 'b', 'b-token']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const key = seedPrivateState(r);
+  await openPlayer(r);
+  let calls = 0;
+  r.api.authStatus = async () => { calls++; return { logged: true, user: user('a') }; };
+  assert.equal((await r.useAuth.getState().switchTo('netease', 'a')).ok, true);
+  assert.equal(calls, 0);
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assertPrivateState(r, key);
+  const pending = deferred();
+  let signal;
+  r.api.authStatus = (_platform, options) => { signal = options.signal; return pending.promise; };
+  const switching = r.useAuth.getState().switchTo('netease', 'b');
+  assert.equal((await r.useAuth.getState().switchTo('netease', 'a')).ok, true);
+  assert.equal(signal.aborted, true);
+  pending.resolve({ logged: true, user: user('b') });
+  assert.equal((await switching).ok, false);
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assertPrivateState(r, key);
+});
+
+test('verifying the active token keeps its private state and only signs out when it is expired', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(['netease', 'a', 'a-token']) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  const key = seedPrivateState(r);
+  await openPlayer(r);
+  r.useAuth.setState(state => ({ users: { ...state.users, netease: null } }));
+  const pending = deferred();
+  let request;
+  r.api.authStatus = (_platform, options) => { request = options; return pending.promise; };
+  const switching = r.useAuth.getState().switchTo('netease', 'a');
+  assert.equal(request.token, 'a-token');
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assertPrivateState(r, key);
+  pending.resolve({ logged: true, user: user('a') });
+  assert.equal((await switching).ok, true);
+  assert.equal(r.useAuth.getState().users.netease.userId, 'a');
+  assertPrivateState(r, key);
+  r.useAuth.setState(state => ({ users: { ...state.users, netease: null } }));
+  r.api.authStatus = async () => ({ logged: false });
+  const expired = await r.useAuth.getState().switchTo('netease', 'a');
+  assert.equal(expired.ok, false);
+  assert.match(expired.message, /过期/);
+  assert.equal(r.useAuth.getState().tokens.netease, '');
+  assert.equal(r.useAuth.getState().users.netease, null);
+  assert.equal(r.readToken('netease'), '');
+  assert.equal(r.useAuth.getState().accounts.some(item => item.userId === 'a'), false);
+  assert.equal(r.usePlayer.getState().playlist, null);
+  assert.equal(r.queryClient.getQueryData(key), undefined);
+});
+
+test('pending switches and commits stay isolated per platform', async t => {
+  const r = runtime(t, { 'mfu:accounts': seededAccounts(
+    ['netease', 'a', 'a-token'], ['netease', 'b', 'b-token'], ['netease', 'c', 'c-token'],
+    ['qq', 'q', 'q-token'], ['qq', 'r', 'r-token'],
+  ) });
+  r.useAuth.getState().adopt('netease', 'a-token', user('a'));
+  r.useAuth.getState().adopt('qq', 'q-token', user('q'));
+  await openPlayer(r);
+  const requests = { netease: [], qq: [] };
+  r.api.authStatus = (platform, options) => {
+    const pending = deferred();
+    requests[platform].push({ options, pending });
+    return pending.promise;
+  };
+  const b = r.useAuth.getState().switchTo('netease', 'b');
+  const q = r.useAuth.getState().switchTo('qq', 'r');
+  const c = r.useAuth.getState().switchTo('netease', 'c');
+  assert.equal(requests.netease.length, 2);
+  assert.equal(requests.qq.length, 1);
+  assert.equal(requests.netease[0].options.signal.aborted, true);
+  assert.equal(requests.qq[0].options.signal.aborted, false);
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assert.equal(r.useAuth.getState().tokens.qq, 'q-token');
+  requests.qq[0].pending.resolve({ logged: true, user: user('r') });
+  assert.equal((await q).ok, true);
+  assert.equal(r.useAuth.getState().tokens.qq, 'r-token');
+  assert.equal(r.useAuth.getState().tokens.netease, 'a-token');
+  assert.equal(r.usePlayer.getState().playlist.id, 'playing');
+  requests.netease[1].pending.resolve({ logged: true, user: user('c') });
+  assert.equal((await c).ok, true);
+  assert.equal(r.useAuth.getState().tokens.netease, 'c-token');
+  assert.equal(r.useAuth.getState().tokens.qq, 'r-token');
+  assert.equal(r.usePlayer.getState().playlist, null);
+  requests.netease[0].pending.resolve({ logged: true, user: user('b') });
+  assert.equal((await b).ok, false);
+  assert.equal(r.useAuth.getState().tokens.netease, 'c-token');
 });
 
 test('latest playlist open wins and aborted playlist responses stay discarded', async t => {
