@@ -2,9 +2,9 @@
 
 ## 当前方向（2026-11-17）
 
-**2.4.2 发布进行中：本地验收已完成，用户于 2026-11-17 授权推送并继续既有部署与 Release 流程。** 仅维护 master，node 继续冻结。发布前已核实两个自定义域名 health 为 200/ok/75ea88b；Apple Music 平台接入沿用原评估与环境依赖。
+**当前线上为 2.4.2，已完成推送、自动部署、线上核验与 GitHub Release。** 仅维护 master，node 继续冻结。三个入口 health 均为 200/ok/81936bc；Apple Music 平台接入沿用原评估与环境依赖。
 
-## 2.4.2 链接与账号切换可靠性（2026-11-17，本地验收完成）
+## 2.4.2 链接与账号切换可靠性（2026-11-17，已发布）
 
 - 用户要求 DeepSeek 与 Codex 协作完善项目。本批选择已复现的可靠性问题；Codex 负责后端修复、整合与浏览器验收，DeepSeek 经 OMP 完成前端审查、账号切换修复与回归。
 - `cloudflare/src/playlists.js` 支持网易云 `#/playlist?id=…` 与对应歌单路径；保留原普通链接、纯 ID 和其他平台规则。新增平台解析与 Worker parse → generate → 签名 M3U8 回归，旧实现 2 项失败，修复后通过。
@@ -12,8 +12,11 @@
 - 新增 15 个前端运行时回归；最终 `npm test` 260/260（根 26、Worker 128、前端 106）。`npm run check`、React 生产构建、Worker dry-run、Pages Functions 打包通过；hls.js 保留原有按需分块体积提示。
 - 隔离浏览器使用本地 SQLite、实际 Worker 处理函数和合成 WAV：网易云 hash 链接成功生成并读取含 2 首的 M3U8；切换网络失败/目标过期时同一音频、进度、当前账号与迷你播放器保持，成功切换才暂停旧音频并清理队列。1280px/375px 截图已查看，375px 无横向溢出，验收流程 pageerror 为 0。
 - 根、web、cloudflare 的 package/lock 共 9 个版本字段已同步 2.4.2，更新 `CHANGELOG.md`。数据库沿用 0005，本批不涉及 schema 或历史数据修正。
-- 验收脚本与隔离夹具：`.codex/audits/2026-11-17-2.4.2/`；日志与截图：`output/playwright/2.4.2/`；待发布说明：`.codex/releases/2026-11-17-2.4.2/RELEASE_NOTES.md`。
-- 2026-11-17 用户已授权发布。当前步骤：提交并推送 master，验证既有 Cloudflare 自动部署与线上版本，再为实际发布提交创建 v2.4.2 标签与中文 GitHub Release 并核对 Latest。
+- 验收脚本与隔离夹具：`.codex/audits/2026-11-17-2.4.2/`；本地日志与截图：`output/playwright/2.4.2/`；发布与线上证据：`.codex/releases/2026-11-17-2.4.2/`。
+- 用户授权发布后，提交 `81936bceed93ff6280d7830e1c0a4ab34bddb6d2` 已推送 master，v2.4.2 标签准确指向该提交；[中文 Release](https://github.com/znc15/MusicForUrl/releases/tag/v2.4.2) 已发布并核对为 Latest。冻结 node 仍为 `f3830c4374d3e6d48f14e889acf66a80570c5600`。
+- [Project checks 44020837590](https://github.com/znc15/MusicForUrl/actions/runs/44020837590) 与 Cloudflare Workers Builds 检查均成功。CI 复验 260 项常规测试、2 项隔离本地 D1 集成，以及 React/Worker/Pages/文档构建；文档发布工作流因本批路径未涉及文档站而未触发。
+- Cloudflare 自动构建 `62668830-d517-4040-a982-c57c4bf07b31` 完整成功，生产 Worker 版本 `2c886096-e656-47f8-b4be-67e293bd74a8`，部署记录 `6b2cbb4f-d5f6-473f-80d3-fb8b5bb20a43`。原 D1、私有 R2、两项 Analytics、ASSETS、ENCRYPTION_KEY 与 Smart Placement 保持。前一可回退 Worker 为 `30de8e83-7def-44f4-817a-34a8975ce225`。
+- `nyasakura.com`、`music.nyasakura.com`、`music-for-url.miaofile.workers.dev` 的 health 均返回 200/ok 与完整发布提交 SHA。线上关于页实际显示 2.4.2，375px 页面无横向溢出；版本区域截图已查看，核验流程 pageerror 为 0。原平台账号与 VRChat/AVPro 实播依赖沿用既有记录。
 
 ## 2.4.1 控件与统计修复（2026-11-05，已发布）
 
